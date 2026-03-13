@@ -68,7 +68,7 @@ from langgraph.types import Command
 
 from malibu.agent.compaction import CompactionManager
 from malibu.agent.modes import DEFAULT_MODES
-from malibu.agent.subagents.manager import SubAgentManager
+ 
 from malibu.config import Settings
 from malibu.server.auth import ServerAuthHandler
 from malibu.server.config_options import ConfigOptionManager
@@ -104,7 +104,6 @@ class MalibuAgent(ACPAgent):
         self._extensions = ExtensionRegistry()
         self._cancelled: dict[str, bool] = {}
         self._compaction_mgr = CompactionManager()
-        self._subagent_mgr = SubAgentManager()
 
         # Register built-in extension methods
         self._extensions.register_method("compact", self._ext_compact)
@@ -634,14 +633,7 @@ class MalibuAgent(ACPAgent):
         cwd = self._session_mgr._cwds.get(session_id, ".")
 
         try:
-            plan_result = await self._subagent_mgr.spawn(
-                agent_type="planner",
-                task=task,
-                settings=self._settings,
-                cwd=cwd,
-            )
-            log.info("plan_generated", session_id=session_id, task=task[:50])
-            return {"plan": plan_result, "todos": []}
+            raise RequestError(-32601, "Planning subagent is now natively integrated via deep agents. Please ask the agent directly to generate a plan via a normal message.")
         except Exception as exc:
             log.exception("plan_failed", session_id=session_id)
             raise RequestError(-32603, f"Planning failed: {exc}")

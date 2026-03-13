@@ -24,6 +24,14 @@ cp .env.example .env
 
 # 3) Launch
 malibu
+
+# Option 1: Using uv (no activation needed)
+uv run malibu
+
+# Option 2: Activate venv first, then call directly
+.venv\Scripts\activate
+malibu
+
 ```
 
 That's it. Type `malibu` and the terminal UI launches immediately — welcome screen, branded interface, and chat input ready to go.

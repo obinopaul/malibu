@@ -1,6 +1,6 @@
 """Configuration utilities for loading and saving plugin registry files.
 
-Standalone implementation — no opendev imports.
+Standalone implementation — no external dependencies.
 All paths under ~/.malibu/ and <project>/.malibu/.
 """
 

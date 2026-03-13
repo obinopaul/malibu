@@ -3,8 +3,6 @@
 Hooks allow custom commands to run at lifecycle events such as session
 start, pre/post tool use, compaction, etc. Commands can add context,
 modify inputs, or block actions.
-
-Adapted from OpenDev's hooks architecture.
 """
 
 from malibu.hooks.models import HookEvent, HookConfig, HookCommand, HookMatcher

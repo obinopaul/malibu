@@ -3,8 +3,6 @@
 Uses a shadow git repository to create atomic snapshots of modified files
 before and after tool execution. This enables reliable revert of any
 change set, regardless of complexity.
-
-Adapted from OpenDev's snapshot system.
 """
 
 from __future__ import annotations

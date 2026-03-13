@@ -100,49 +100,6 @@ class SessionManager:
         if skill_prompt:
             extra_prompt_parts.append(skill_prompt)
 
-        # Subagent delegation tool
-        try:
-            from malibu.agent.subagents.manager import SubAgentManager
-
-            manager = SubAgentManager()
-            settings = self._settings
-
-            async def delegate_to_subagent(agent_type: str, task: str) -> str:
-                """Delegate a task to a specialised subagent.
-
-                Available agent types: code_explorer (read-only codebase analysis),
-                planner (task planning and breakdown), ask_user (structured questions).
-
-                Args:
-                    agent_type: The type of subagent to spawn.
-                    task: Natural-language description of the task.
-                """
-                return await manager.spawn(agent_type, task, settings, cwd)
-
-            from langchain_core.tools import StructuredTool
-
-            delegation_tool = StructuredTool.from_function(
-                coroutine=delegate_to_subagent,
-                name="delegate_to_subagent",
-                description=(
-                    "Delegate a task to a specialised subagent. "
-                    "Types: code_explorer (read-only codebase analysis), "
-                    "planner (task planning), ask_user (structured questions to the user)."
-                ),
-            )
-            extra_tools.append(delegation_tool)
-
-            subagent_prompt = (
-                "\n\nYou have access to specialised subagents via delegate_to_subagent():\n"
-                "- code_explorer: Read-only codebase analysis (read_file, ls, grep)\n"
-                "- planner: Task planning and breakdown (read_file, ls, grep, write_todos)\n"
-                "- ask_user: Formulates structured questions for the user\n"
-                "Use subagents for complex research or planning tasks."
-            )
-            extra_prompt_parts.append(subagent_prompt)
-        except Exception as exc:
-            log.warning("subagent_tool_setup_failed", error=str(exc))
-
         extra_prompt = "\n\n".join(extra_prompt_parts) if extra_prompt_parts else ""
         return extra_tools, extra_prompt
 
