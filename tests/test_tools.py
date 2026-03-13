@@ -213,11 +213,13 @@ class TestWriteTodos:
             {"content": "Step 1", "status": "pending"},
             {"content": "Step 2", "status": "pending"},
         ]})
-        assert "2 items" in result
+        assert "Plan updated" in result
+        assert "Step 1" in result
+        assert "Step 2" in result
 
     def test_write_todos_empty(self):
         result = write_todos.invoke({"todos": []})
-        assert "0 items" in result
+        assert "Plan updated" in result
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -226,4 +228,15 @@ class TestWriteTodos:
 
 def test_all_tools_contains_expected():
     names = {t.name for t in ALL_TOOLS}
-    assert names == {"read_file", "write_file", "edit_file", "ls", "grep", "execute", "write_todos"}
+    # Core tools are always present
+    core = {"read_file", "write_file", "edit_file", "ls", "grep", "execute", "write_todos"}
+    assert core.issubset(names), f"Missing core tools: {core - names}"
+
+    # Git tools are conditionally present (only when git is installed)
+    import shutil
+    if shutil.which("git"):
+        git_tools = {
+            "git_status", "git_diff", "git_log", "git_commit",
+            "git_worktree_create", "git_worktree_list", "git_worktree_remove",
+        }
+        assert git_tools.issubset(names), f"Missing git tools: {git_tools - names}"

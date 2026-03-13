@@ -4,7 +4,7 @@
 
 ### Root & Entry
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\__init__.py` - Main package init (version=0.1.0)
-- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\__main__.py` - CLI dispatcher (server, client, duet, api, generate-key commands)
+- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\__main__.py` - CLI dispatcher (server, client, duet, generate-key commands)
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\config.py` - Settings/configuration via Pydantic BaseSettings
 
 ### Agent Logic (malibu/agent/)
@@ -15,12 +15,6 @@
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\agent\prompts.py` - build_system_prompt() with mode-aware instructions
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\agent\state.py` - SessionMeta dataclass
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\agent\tools.py` - @tool decorators (read_file, write_file, edit_file, ls, grep, write_todos, execute)
-
-### API Layer (malibu/api/)
-- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\api\__init__.py` - Empty
-- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\api\app.py` - create_app() FastAPI factory
-- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\api\routes.py` - REST endpoints (health, sessions, prompt, mode, config) - STUBS
-- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\api\websocket.py` - WebSocket endpoint scaffold
 
 ### Auth Layer (malibu/auth/)
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\auth\__init__.py` - Empty
@@ -59,14 +53,12 @@
 ### Telemetry Layer (malibu/telemetry/)
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\telemetry\__init__.py` - Empty
 - `c:\Users\pault\Downloads\python-sdk\malibu\malibu\telemetry\logging.py` - setup_logging(), get_logger() via structlog
-- `c:\Users\pault\Downloads\python-sdk\malibu\malibu\telemetry\tracing.py` - init_tracing(), span(), async_span() for OpenTelemetry
 
 ## Test Files (malibu/tests/) - Full Paths
 
 - `c:\Users\pault\Downloads\python-sdk\malibu\tests\__init__.py` - Empty
 - `c:\Users\pault\Downloads\python-sdk\malibu\tests\conftest.py` - Shared test fixtures (settings, mocks, db)
 - `c:\Users\pault\Downloads\python-sdk\malibu\tests\test_accumulator.py` - MalibuSessionAccumulator tests
-- `c:\Users\pault\Downloads\python-sdk\malibu\tests\test_api.py` - FastAPI routes tests
 - `c:\Users\pault\Downloads\python-sdk\malibu\tests\test_auth.py` - JWTHandler, JWTProvider, APIKeyProvider, CompositeAuthProvider tests
 - `c:\Users\pault\Downloads\python-sdk\malibu\tests\test_config.py` - Settings tests
 - `c:\Users\pault\Downloads\python-sdk\malibu\tests\test_config_options.py` - ConfigOptionManager tests
@@ -88,7 +80,7 @@
 
 ### Coverage Status
 - ✅ Full test coverage: agent/, auth/, client/, server/ (permissions, plans, security, streaming, content, extensions, config_options), telemetry/
-- ⚠️ Partial coverage: api/ (only routes scaffolded, not wired), persistence/ (module exists but tests missing)
+- ⚠️ Partial coverage: persistence/ (module exists but tests missing)
 - ❌ NO test coverage: config.py (Settings), __main__.py (CLI commands), agent/graph.py (create_agent factory), agent/middleware.py, agent/tools.py, client/client.py (MalibuClient impl), server/agent.py (MalibuAgent impl), server/sessions.py (SessionManager), persistence/connection.py, persistence/repository.py
 
 ### GAP ANALYSIS
@@ -101,7 +93,6 @@
 5. **build_agent()** - No tests for the LangGraph agent factory
 6. **Agent tools** - No tests for tool implementations (read_file, write_file, execute, etc.)
 7. **__main__.py** - No CLI command tests
-8. **API routes** - All routes are stubs, no real wiring or tests
 
 **RECOMMENDATION**: Priority for testing:
 1. malibu/server/agent.py - MalibuAgent (15 methods)

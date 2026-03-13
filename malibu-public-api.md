@@ -71,28 +71,6 @@ VERSION = "0.1.0"
 **Constants:**
 - `ALL_TOOLS: list[...]` - All tool functions bundled for create_agent()
 
-## malibu/api/app.py
-**Functions:**
-- `create_app() -> FastAPI` - FastAPI application factory
-
-## malibu/api/routes.py
-**Models:**
-- `SessionCreateRequest`, `SessionCreateResponse`
-- `PromptRequest`, `PromptResponse`
-- `ModeChangeRequest`, `ConfigOptionRequest`
-
-**Endpoints (all 501 Not Implemented stubs):**
-- GET `/health` -> dict
-- POST `/sessions` - create_session
-- POST `/prompt` - prompt
-- POST `/sessions/mode` - set_mode
-- POST `/sessions/config` - set_config
-- GET `/sessions` - list_sessions
-
-## malibu/api/websocket.py
-**Endpoints:**
-- WebSocket `/session/{session_id}` - session_ws
-
 ## malibu/auth/jwt_handler.py
 **Classes:**
 - `JWTHandler`
@@ -296,10 +274,3 @@ VERSION = "0.1.0"
 **Functions:**
 - `setup_logging(settings: Settings) -> None`
 - `get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger`
-
-## malibu/telemetry/tracing.py
-**Functions:**
-- `init_tracing(settings: Settings) -> None`
-- `span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[Any]` (context manager)
-- `async_span(name: str, attributes: dict[str, Any] | None = None) -> AsyncIterator[Any]` (async context manager)
-- `get_tracer() -> Any`

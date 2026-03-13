@@ -20,8 +20,6 @@ class TestSettingsDefaults:
         assert s.jwt_algorithm == "HS256"
         assert s.jwt_expiry_hours == 24
         assert s.max_file_size == 10 * 1024 * 1024
-        assert s.otel_enabled is False
-        assert s.api_port == 8000
 
     def test_allowed_paths_default_empty(self, monkeypatch):
         monkeypatch.delenv("ALLOWED_PATHS", raising=False)

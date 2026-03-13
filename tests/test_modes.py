@@ -9,12 +9,12 @@ class TestDefaultModes:
     def test_current_mode_is_accept_edits(self):
         assert DEFAULT_MODES.current_mode_id == "accept_edits"
 
-    def test_three_modes_available(self):
-        assert len(DEFAULT_MODES.available_modes) == 3
+    def test_four_modes_available(self):
+        assert len(DEFAULT_MODES.available_modes) == 4
 
     def test_mode_ids(self):
         ids = {m.id for m in DEFAULT_MODES.available_modes}
-        assert ids == {"ask_before_edits", "accept_edits", "accept_everything"}
+        assert ids == {"plan", "ask_before_edits", "accept_edits", "accept_everything"}
 
     def test_modes_have_names_and_descriptions(self):
         for mode in DEFAULT_MODES.available_modes:

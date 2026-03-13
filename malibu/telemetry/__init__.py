@@ -1,1 +1,1 @@
-"""Telemetry layer — structured logging and optional OpenTelemetry tracing."""
+"""Telemetry layer — structured logging."""

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Model string in LangChain format: "provider:model-name"
     # Examples: "openai:gpt-4o", "anthropic:claude-sonnet-4-5"
     # Or just the model name to use with a custom base_url.
-    llm_model: str = "openai:gpt-4o"
+    llm_model: str = "openai:gpt-5.4"
     llm_api_key: str = ""
     llm_base_url: str | None = None
 
@@ -47,16 +47,26 @@ class Settings(BaseSettings):
     allowed_paths: list[str] = Field(default_factory=list)
     max_file_size: int = 10 * 1024 * 1024  # 10 MB
 
-    # ── API Gateway ───────────────────────────────────────────────
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-
-    # ── Telemetry ─────────────────────────────────────────────────
-    otel_enabled: bool = False
-    otel_service_name: str = "malibu"
-
     # ── Unstable Protocol ─────────────────────────────────────────
     enable_unstable_protocol: bool = True
+
+    # ── TUI ────────────────────────────────────────────────────────
+    tui_theme: str = "dark"
+    tui_unicode: bool = True
+    tui_show_welcome: bool = True
+
+    # ── Skills ─────────────────────────────────────────────────────
+    skills_paths: list[str] = Field(default_factory=list)
+    skills_enabled: bool = True
+
+    # ── MCP ────────────────────────────────────────────────────────
+    mcp_config_paths: list[str] = Field(default_factory=list)
+
+    # ── Subsystem toggles ──────────────────────────────────────────
+    hooks_enabled: bool = True
+    cost_tracking_enabled: bool = True
+    git_tools_enabled: bool = True
+    dangerous_command_warn: bool = True
 
     def resolve_allowed_paths(self, cwd: str) -> list[Path]:
         """Return resolved allowed paths, defaulting to session cwd."""

@@ -66,7 +66,9 @@ from acp.schema import (
 )
 from langgraph.types import Command
 
+from malibu.agent.compaction import CompactionManager
 from malibu.agent.modes import DEFAULT_MODES
+from malibu.agent.subagents.manager import SubAgentManager
 from malibu.config import Settings
 from malibu.server.auth import ServerAuthHandler
 from malibu.server.config_options import ConfigOptionManager
@@ -101,6 +103,13 @@ class MalibuAgent(ACPAgent):
         self._auth_handler = ServerAuthHandler(settings)
         self._extensions = ExtensionRegistry()
         self._cancelled: dict[str, bool] = {}
+        self._compaction_mgr = CompactionManager()
+        self._subagent_mgr = SubAgentManager()
+
+        # Register built-in extension methods
+        self._extensions.register_method("compact", self._ext_compact)
+        self._extensions.register_method("plan", self._ext_plan)
+        self._extensions.register_method("skills", self._ext_skills)
 
     # ───────────────────────────────────────────────────────────
     # Connection lifecycle
@@ -588,3 +597,78 @@ class MalibuAgent(ACPAgent):
                         )
 
         return user_decisions
+
+    # ═══════════════════════════════════════════════════════════
+    # Extension method handlers
+    # ═══════════════════════════════════════════════════════════
+
+    async def _ext_compact(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Handle the 'compact' extension method — compact a session's context."""
+        session_id = params.get("session_id", "")
+        if not session_id:
+            raise RequestError(-32602, "session_id is required")
+
+        agent = self._session_mgr.get_agent(session_id)
+        if agent is None:
+            raise RequestError(-32602, f"No agent for session {session_id}")
+
+        await self._compaction_mgr.compact_state(
+            agent, session_id, self._settings
+        )
+
+        # Notify client
+        await self._send_text(session_id, "[Context compacted — older messages summarised.]")
+        log.info("compaction_complete", session_id=session_id)
+        return {"status": "compacted"}
+
+    async def _ext_plan(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Handle the 'plan' extension method — invoke the planner subagent."""
+        session_id = params.get("session_id", "")
+        task = params.get("task", "")
+
+        if not session_id:
+            raise RequestError(-32602, "session_id is required")
+        if not task:
+            raise RequestError(-32602, "task is required")
+
+        cwd = self._session_mgr._cwds.get(session_id, ".")
+
+        try:
+            plan_result = await self._subagent_mgr.spawn(
+                agent_type="planner",
+                task=task,
+                settings=self._settings,
+                cwd=cwd,
+            )
+            log.info("plan_generated", session_id=session_id, task=task[:50])
+            return {"plan": plan_result, "todos": []}
+        except Exception as exc:
+            log.exception("plan_failed", session_id=session_id)
+            raise RequestError(-32603, f"Planning failed: {exc}")
+
+    async def _ext_skills(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Handle the 'skills' extension method — list or get info about skills."""
+        session_id = params.get("session_id", "")
+        action = params.get("action", "list")
+        skill_name = params.get("skill_name")
+
+        if not session_id:
+            raise RequestError(-32602, "session_id is required")
+
+        registry = self._session_mgr.skill_registry
+
+        if action == "info" and skill_name:
+            skill = registry.get_skill(skill_name)
+            if skill:
+                return {
+                    "skill": {
+                        "name": skill["name"],
+                        "description": skill["description"],
+                        "source": skill.get("source", "unknown"),
+                        "instructions": skill.get("instructions", ""),
+                    }
+                }
+            return {"skill": None}
+
+        # Default: list all skills
+        return {"skills": registry.list_skills()}

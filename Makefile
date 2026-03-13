@@ -1,4 +1,4 @@
-.PHONY: install check test lint format types migrate run-server run-client run-duet run-api clean
+.PHONY: install check test lint format types migrate run-server run-client run-duet clean
 
 # ── Bootstrap ──────────────────────────────────────────────────────
 install:
@@ -40,9 +40,6 @@ run-client:
 
 run-duet:
 	uv run python -m malibu duet
-
-run-api:
-	uv run python -m malibu api
 
 # ── Docker ─────────────────────────────────────────────────────────
 docker-up:

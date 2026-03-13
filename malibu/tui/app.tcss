@@ -1,0 +1,209 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Malibu TUI — Main Stylesheet
+ *
+ * Layout (top to bottom):
+ *   StatusBar      — fixed 1-line header
+ *   MiddlePane     — flexible row containing MessageList + PlanPanel
+ *   ChatInput      — fixed input bar at the bottom
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── CSS Variables (mirror theme.py Colors) ────────────────────────────────── */
+
+$brand-primary: #0077B6;
+$brand-secondary: #00B4D8;
+$brand-accent: #90E0EF;
+$brand-dark: #03045E;
+$brand-light: #CAF0F8;
+
+$bg-primary: #0A0E14;
+$bg-secondary: #11151C;
+$bg-surface: #1A1F2B;
+$bg-elevated: #232A38;
+
+$text-primary: #E0E6ED;
+$text-secondary: #8892A0;
+$text-muted: #5C6370;
+
+$success: #2ECC71;
+$warning: #F1C40F;
+$error: #E74C3C;
+$info: #00B4D8;
+
+$border-default: #2A3040;
+$border-focus: #0077B6;
+
+/* ── Screen Root ───────────────────────────────────────────────────────────── */
+
+Screen {
+    background: $bg-primary;
+    color: $text-primary;
+    layout: vertical;
+}
+
+/* ── StatusBar ─────────────────────────────────────────────────────────────── */
+
+#status-bar {
+    dock: top;
+    height: 1;
+    background: $brand-dark;
+    color: $brand-light;
+    content-align: left middle;
+    padding: 0 1;
+}
+
+#status-bar .status-indicator {
+    color: $success;
+    margin-right: 1;
+}
+
+#status-bar .status-model {
+    color: $brand-accent;
+}
+
+#status-bar .status-session {
+    color: $text-secondary;
+    dock: right;
+    margin-right: 1;
+}
+
+/* ── Middle Pane (MessageList + PlanPanel) ─────────────────────────────────── */
+
+#middle-pane {
+    layout: horizontal;
+    height: 1fr;
+}
+
+/* ── MessageList ───────────────────────────────────────────────────────────── */
+
+#message-list {
+    width: 3fr;
+    height: 100%;
+    background: $bg-primary;
+    border-right: solid $border-default;
+    overflow-y: auto;
+    padding: 0 1;
+}
+
+#message-list .message {
+    margin: 1 0;
+    padding: 0 1;
+}
+
+#message-list .message-user {
+    background: $bg-elevated;
+    color: $text-primary;
+    border-left: tall $brand-primary;
+    padding-left: 1;
+}
+
+#message-list .message-assistant {
+    background: $bg-secondary;
+    color: $text-primary;
+    border-left: tall $brand-secondary;
+    padding-left: 1;
+}
+
+#message-list .message-system {
+    color: $text-muted;
+    text-style: italic;
+}
+
+#message-list .message-error {
+    color: $error;
+    border-left: tall $error;
+    padding-left: 1;
+}
+
+#message-list .thinking {
+    color: $text-secondary;
+    text-style: italic;
+}
+
+/* ── PlanPanel ─────────────────────────────────────────────────────────────── */
+
+#plan-panel {
+    width: 1fr;
+    min-width: 30;
+    height: 100%;
+    background: $bg-secondary;
+    overflow-y: auto;
+    padding: 1;
+}
+
+#plan-panel .plan-title {
+    text-style: bold;
+    color: $brand-accent;
+    margin-bottom: 1;
+}
+
+#plan-panel .plan-step {
+    margin: 0 0 0 1;
+    color: $text-secondary;
+}
+
+#plan-panel .plan-step-active {
+    color: $brand-secondary;
+    text-style: bold;
+}
+
+#plan-panel .plan-step-done {
+    color: $success;
+}
+
+#plan-panel .plan-step-failed {
+    color: $error;
+}
+
+/* ── ChatInput ─────────────────────────────────────────────────────────────── */
+
+#chat-input {
+    dock: bottom;
+    height: auto;
+    max-height: 8;
+    background: $bg-surface;
+    border-top: solid $border-default;
+    padding: 0 1;
+}
+
+#chat-input:focus-within {
+    border-top: solid $border-focus;
+}
+
+#chat-input TextArea {
+    background: $bg-surface;
+    color: $text-primary;
+    border: none;
+    min-height: 1;
+    max-height: 6;
+}
+
+#chat-input TextArea:focus {
+    border: none;
+}
+
+#chat-input .input-hint {
+    color: $text-muted;
+    text-align: right;
+    height: 1;
+    padding-right: 1;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+
+ScrollBar {
+    background: $bg-secondary;
+}
+
+ScrollBar > .scrollbar--bar {
+    color: $border-default;
+}
+
+ScrollBar > .scrollbar--bar:hover {
+    color: $brand-primary;
+}
+
+/* ── Focus Ring ────────────────────────────────────────────────────────────── */
+
+*:focus {
+    border: solid $border-focus;
+}

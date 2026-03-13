@@ -6,8 +6,8 @@ Malibu is a production-grade ACP (Agent-Client Protocol) agent harness that impl
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                   CLI / API                       │
-│  __main__.py  │  api/app.py  │  api/routes.py    │
+│                   CLI                         │
+│  __main__.py  (server | client | duet)        │
 ├──────────────────────────────────────────────────┤
 │              ACP Protocol Layer                   │
 │  ┌──────────────────┐  ┌──────────────────────┐  │
@@ -21,7 +21,7 @@ Malibu is a production-grade ACP (Agent-Client Protocol) agent harness that impl
 ├──────────────────────────────────────────────────┤
 │              Infrastructure                       │
 │  persistence/  │  auth/  │  telemetry/            │
-│  (PostgreSQL)  │ (JWT)   │ (structlog + OTel)     │
+│  (PostgreSQL)  │ (JWT)   │ (structlog)             │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -113,4 +113,3 @@ Malibu is a production-grade ACP (Agent-Client Protocol) agent harness that impl
 | Module | Purpose |
 |---|---|
 | `logging.py` | structlog with JSON (prod) / console (dev) |
-| `tracing.py` | Optional OpenTelemetry with sync/async spans |

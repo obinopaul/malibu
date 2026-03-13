@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "malibu"
 version = "0.1.0"
-description = "Malibu — A production-grade ACP (Agent Client Protocol) agent harness with LangGraph, PostgreSQL persistence, JWT authentication, and full protocol coverage."
+description = "Malibu — AI-powered terminal coding agent with rich TUI, Git integration, hooks, and plugin system."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-keywords = ["agent", "acp", "agent-client-protocol", "langgraph", "ai-agents", "harness"]
+keywords = ["agent", "terminal", "coding-agent", "tui", "ai-agents", "langgraph", "acp"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -44,13 +44,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # Observability
     "structlog>=24.4.0",
-    # API scaffold
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.34.0",
+    # Terminal UI
+    "textual>=1.0",
 ]
 
 [project.optional-dependencies]
-otel = ["opentelemetry-sdk>=1.28.0", "opentelemetry-api>=1.28.0"]
 logfire = ["logfire>=0.14"]
 
 [project.scripts]

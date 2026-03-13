@@ -23,9 +23,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://malibu:malibu@postgres:5432/malibu
-    ports:
-      - "8000:8000"
-    command: ["api"]
+    command: ["server"]
 
 volumes:
   pgdata:

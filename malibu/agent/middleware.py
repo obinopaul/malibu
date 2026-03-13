@@ -14,6 +14,7 @@ from typing import Any
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware, wrap_tool_call
 
+from malibu.context_engineering.adapter import build_runtime_context
 from malibu.agent.modes import get_interrupt_on
 
 
@@ -45,6 +46,14 @@ def load_local_context(cwd: str) -> str | None:
 
     Returns concatenated content or ``None`` if no files are found.
     """
+    try:
+        context = build_runtime_context(cwd)
+        if context:
+            return context
+    except Exception:
+        # Fallback to legacy direct file loading.
+        pass
+
     parts: list[str] = []
     for filename in _CONTEXT_FILES:
         ctx_path = Path(cwd) / filename
@@ -54,6 +63,17 @@ def load_local_context(cwd: str) -> str | None:
                 parts.append(f"### {filename}\n{content}")
             except OSError:
                 continue
+
+    # Append git context if available
+    try:
+        from malibu.git.operations import get_git_context
+
+        git_ctx = get_git_context(cwd)
+        if git_ctx:
+            parts.append(f"## Git Context\n{git_ctx}")
+    except Exception:
+        pass
+
     return "\n\n".join(parts) if parts else None
 
 
@@ -80,16 +100,83 @@ async def log_tool_calls(request: Any, handler: Any) -> Any:
     return result
 
 
-def build_middleware_stack(mode_id: str) -> list:
+# ═══════════════════════════════════════════════════════════════════
+# Hook middleware — fires PRE_TOOL_USE / POST_TOOL_USE lifecycle events
+# ═══════════════════════════════════════════════════════════════════
+
+def _extract_tool_name(request: Any) -> str:
+    """Extract the tool name from a middleware request."""
+    if isinstance(request.tool_call, dict):
+        return request.tool_call.get("name", "unknown")
+    return str(request.tool_call)
+
+
+def _extract_tool_args(request: Any) -> dict:
+    """Extract the tool arguments from a middleware request."""
+    if isinstance(request.tool_call, dict):
+        return request.tool_call.get("args", {})
+    return {}
+
+
+def _build_hook_middleware(hook_manager: Any) -> Any:
+    """Build a @wrap_tool_call middleware that fires hooks.
+
+    Args:
+        hook_manager: A HookManager instance.
+
+    Returns:
+        A wrap_tool_call-decorated middleware function.
+    """
+    from malibu.hooks.models import HookEvent
+
+    @wrap_tool_call
+    async def fire_hooks(request: Any, handler: Any) -> Any:
+        tool_name = _extract_tool_name(request)
+        tool_args = _extract_tool_args(request)
+
+        # Fire PRE_TOOL_USE
+        if hook_manager.has_hooks_for(HookEvent.PRE_TOOL_USE):
+            outcome = hook_manager.run_hooks(
+                HookEvent.PRE_TOOL_USE,
+                match_value=tool_name,
+                event_data={"tool": tool_name, "args": tool_args},
+            )
+            if outcome.blocked:
+                return f"Blocked by hook: {outcome.block_reason}"
+
+        # Execute tool
+        result = await handler(request)
+
+        # Fire POST_TOOL_USE
+        if hook_manager.has_hooks_for(HookEvent.POST_TOOL_USE):
+            hook_manager.run_hooks(
+                HookEvent.POST_TOOL_USE,
+                match_value=tool_name,
+                event_data={"tool": tool_name, "args": tool_args, "result": str(result)[:2000]},
+            )
+
+        return result
+
+    return fire_hooks
+
+
+def build_middleware_stack(mode_id: str, *, hook_manager: Any | None = None) -> list:
     """Assemble the full middleware list for ``create_agent(middleware=...)``.
 
-    Ordering: HITL first (so it intercepts before execution), then custom hooks.
+    Ordering: HITL first, then hooks, then logging.
+
+    Args:
+        mode_id: Agent mode for HITL configuration.
+        hook_manager: Optional HookManager for lifecycle hooks.
     """
     middlewares: list = []
 
     hitl = build_hitl_middleware(mode_id)
     if hitl is not None:
         middlewares.append(hitl)
+
+    if hook_manager is not None:
+        middlewares.append(_build_hook_middleware(hook_manager))
 
     middlewares.append(log_tool_calls)
 

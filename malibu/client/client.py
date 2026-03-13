@@ -63,15 +63,29 @@ log = get_logger(__name__)
 
 
 class MalibuClient(Client):
-    """Production-grade ACP client with full protocol support."""
+    """Production-grade ACP client with full protocol support.
 
-    def __init__(self, settings: Settings, *, cwd: str) -> None:
+    Accepts optional ``display_handler`` and ``permission_handler`` callbacks
+    to support alternative UIs (e.g. the Textual TUI) while keeping the
+    plain terminal mode as the default.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        cwd: str,
+        display_handler: Any | None = None,
+        permission_handler: Any | None = None,
+    ) -> None:
         self._settings = settings
         self._cwd = cwd
         self._file_ops = FileOperations(settings, cwd=cwd)
         self._terminal_mgr = TerminalManager(cwd=cwd)
         self._accumulator = MalibuSessionAccumulator()
         self._agent_conn: Agent | None = None
+        self._display_handler = display_handler or display_session_update
+        self._permission_handler = permission_handler or interactive_permission_prompt
 
     # ───────────────────────────────────────────────────────────
     # Connection lifecycle
@@ -94,7 +108,7 @@ class MalibuClient(Client):
         **kwargs: Any,
     ) -> RequestPermissionResponse:
         log.info("permission_requested", session_id=session_id, title=tool_call.title)
-        return await interactive_permission_prompt(options, tool_call)
+        return await self._permission_handler(options, tool_call)
 
     # ───────────────────────────────────────────────────────────
     # 2. session_update (all 11 update types)
@@ -118,8 +132,8 @@ class MalibuClient(Client):
     ) -> None:
         # Feed into accumulator for state tracking
         self._accumulator.process_update(session_id, update)
-        # Render to console
-        display_session_update(session_id, update, **kwargs)
+        # Render to display (console or TUI)
+        self._display_handler(session_id, update, **kwargs)
 
     # ───────────────────────────────────────────────────────────
     # 3. write_text_file

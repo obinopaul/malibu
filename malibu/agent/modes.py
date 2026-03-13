@@ -20,6 +20,11 @@ DEFAULT_MODES = SessionModeState(
     current_mode_id="accept_edits",
     available_modes=[
         SessionMode(
+            id="plan",
+            name="Plan Mode",
+            description="Agent reasons and plans but all tools require approval.",
+        ),
+        SessionMode(
             id="ask_before_edits",
             name="Ask Before Edits",
             description="Requires approval for file edits, writes, shell commands, and plans.",
@@ -46,6 +51,22 @@ DEFAULT_MODES = SessionModeState(
 #   - dict  → tool requires HITL with the specified allowed_decisions
 #   - False → explicitly no HITL for that tool
 INTERRUPT_ON_BY_MODE: dict[str, dict[str, dict | bool]] = {
+    "plan": {
+        "edit_file": {"allowed_decisions": ["approve", "reject"]},
+        "write_file": {"allowed_decisions": ["approve", "reject"]},
+        "write_todos": {"allowed_decisions": ["approve", "reject"]},
+        "execute": {"allowed_decisions": ["approve", "reject"]},
+        "read_file": {"allowed_decisions": ["approve", "reject"]},
+        "ls": {"allowed_decisions": ["approve", "reject"]},
+        "grep": {"allowed_decisions": ["approve", "reject"]},
+        "git_status": {"allowed_decisions": ["approve", "reject"]},
+        "git_diff": {"allowed_decisions": ["approve", "reject"]},
+        "git_log": {"allowed_decisions": ["approve", "reject"]},
+        "git_commit": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_create": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_list": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_remove": {"allowed_decisions": ["approve", "reject"]},
+    },
     "ask_before_edits": {
         "edit_file": {"allowed_decisions": ["approve", "edit", "reject"]},
         "write_file": {"allowed_decisions": ["approve", "edit", "reject"]},
@@ -54,6 +75,13 @@ INTERRUPT_ON_BY_MODE: dict[str, dict[str, dict | bool]] = {
         "read_file": False,
         "ls": False,
         "grep": False,
+        "git_status": False,
+        "git_diff": False,
+        "git_log": False,
+        "git_worktree_list": False,
+        "git_commit": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_create": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_remove": {"allowed_decisions": ["approve", "reject"]},
     },
     "accept_edits": {
         "write_todos": {"allowed_decisions": ["approve", "reject"]},
@@ -63,6 +91,13 @@ INTERRUPT_ON_BY_MODE: dict[str, dict[str, dict | bool]] = {
         "read_file": False,
         "ls": False,
         "grep": False,
+        "git_status": False,
+        "git_diff": False,
+        "git_log": False,
+        "git_worktree_list": False,
+        "git_commit": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_create": {"allowed_decisions": ["approve", "reject"]},
+        "git_worktree_remove": {"allowed_decisions": ["approve", "reject"]},
     },
     "accept_everything": {},
 }

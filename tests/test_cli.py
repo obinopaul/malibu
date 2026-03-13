@@ -35,19 +35,6 @@ class TestCLIParser:
         args = parser.parse_args(["duet", "--cwd", "/project"])
         assert args.cwd == "/project"
 
-    def test_api_command_defaults(self):
-        parser = _build_parser()
-        args = parser.parse_args(["api"])
-        assert args.command == "api"
-        assert args.host == "0.0.0.0"
-        assert args.port == 8000
-
-    def test_api_custom_host_port(self):
-        parser = _build_parser()
-        args = parser.parse_args(["api", "--host", "127.0.0.1", "--port", "9000"])
-        assert args.host == "127.0.0.1"
-        assert args.port == 9000
-
     def test_generate_key_command(self):
         parser = _build_parser()
         args = parser.parse_args(["generate-key"])

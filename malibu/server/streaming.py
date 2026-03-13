@@ -100,6 +100,15 @@ _KIND_MAP: dict[str, ToolKind] = {
     "glob": "search",
     "grep": "search",
     "execute": "execute",
+    "write_todos": "other",
+    # Git tools
+    "git_status": "search",
+    "git_diff": "read",
+    "git_log": "search",
+    "git_commit": "execute",
+    "git_worktree_create": "execute",
+    "git_worktree_list": "search",
+    "git_worktree_remove": "execute",
 }
 
 
