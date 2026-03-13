@@ -15,7 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Label, Static
+from textual.widgets import DataTable, Footer, Input, Label, Static
 
 
 class SessionBrowserScreen(ModalScreen[str | None]):
@@ -68,6 +68,7 @@ class SessionBrowserScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="browser-container"):
             yield Label("Sessions", id="browser-title")
+            yield Input(placeholder="Filter sessions", id="session-filter")
             yield DataTable(id="session-table")
             yield Static(
                 "[dim]Enter[/] select  |  [dim]n[/] new session  |  [dim]Esc[/] cancel",
@@ -79,16 +80,11 @@ class SessionBrowserScreen(ModalScreen[str | None]):
         table = self.query_one("#session-table", DataTable)
         table.add_columns("ID", "Title", "CWD", "Mode")
         table.cursor_type = "row"
+        self._rebuild_table()
 
-        for session in self._sessions:
-            sid = str(session.get("id", ""))
-            title = str(session.get("title", ""))
-            cwd = str(session.get("cwd", ""))
-            mode = str(session.get("mode", ""))
-            table.add_row(sid, title, cwd, mode, key=sid)
-
-        if not self._sessions:
-            table.add_row("", "(no sessions)", "", "", key="__empty__")
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "session-filter":
+            self._rebuild_table(event.value)
 
     # -- Actions -----------------------------------------------------------
 
@@ -96,7 +92,7 @@ class SessionBrowserScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
     def action_new_session(self) -> None:
-        self.dismiss(None)
+        self.dismiss("__new__")
 
     def action_select_session(self) -> None:
         table = self.query_one("#session-table", DataTable)
@@ -114,3 +110,28 @@ class SessionBrowserScreen(ModalScreen[str | None]):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if self._sessions and event.row_key and str(event.row_key.value) != "__empty__":
             self.dismiss(str(event.row_key.value))
+
+    def _rebuild_table(self, query: str = "") -> None:
+        table = self.query_one("#session-table", DataTable)
+        table.clear(columns=False)
+        lowered = query.strip().lower()
+        filtered = self._sessions
+        if lowered:
+            filtered = [
+                session
+                for session in self._sessions
+                if lowered in str(session.get("session_id", session.get("id", ""))).lower()
+                or lowered in str(session.get("title", "")).lower()
+                or lowered in str(session.get("cwd", "")).lower()
+                or lowered in str(session.get("mode", "")).lower()
+            ]
+
+        for session in filtered:
+            sid = str(session.get("session_id", session.get("id", "")))
+            title = str(session.get("title", ""))
+            cwd = str(session.get("cwd", ""))
+            mode = str(session.get("mode", ""))
+            table.add_row(sid, title, cwd, mode, key=sid)
+
+        if not filtered:
+            table.add_row("", "(no sessions)", "", "", key="__empty__")

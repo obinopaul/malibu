@@ -1,34 +1,16 @@
-"""ChatScreen — primary conversation screen for the Malibu TUI.
-
-Layout
-------
-::
-
-    ┌─────────────────────────────────────────────────┐
-    │  StatusBar (mode, tokens, session info)          │
-    ├──────────────────────────┬──────────────────────┤
-    │  MessageList (scrollable)│  PlanPanel (toggle)   │
-    │                          │                       │
-    ├──────────────────────────┴──────────────────────┤
-    │  ChatInput                                       │
-    └─────────────────────────────────────────────────┘
-
-Handles:
-  - SessionUpdateMessage  → routes to the correct widget
-  - PermissionRequestMessage → pushes ApprovalModal, resolves future
-  - ChatInput.Submitted   → sends prompt via ``self.app.send_prompt``
-"""
+"""Primary Cloud Code-style chat shell for Malibu."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
-from textual import on, work
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical, VerticalGroup
 from textual.screen import Screen
-from textual.widgets import Footer, Static
+from textual.widgets import Static
 
 from acp.schema import (
     AgentMessageChunk,
@@ -37,7 +19,6 @@ from acp.schema import (
     AvailableCommandsUpdate,
     ConfigOptionUpdate,
     CurrentModeUpdate,
-    ImageContentBlock,
     SessionInfoUpdate,
     TextContentBlock,
     ToolCallProgress,
@@ -46,183 +27,783 @@ from acp.schema import (
     UserMessageChunk,
 )
 
-from malibu.tui.bridge import PermissionRequestMessage, SessionUpdateMessage
-from malibu.tui.widgets.chat_input import ChatInput
-from malibu.tui.widgets.message_list import MessageList
+from malibu.agent.modes import DEFAULT_MODES
+from malibu.tui.bridge import (
+    ExtensionNotificationMessage,
+    ExtensionRequestMessage,
+    PermissionRequestMessage,
+    SessionUpdateMessage,
+)
+from malibu.tui.controllers import (
+    ApprovalPromptController,
+    AskUserPromptController,
+    AutocompletePopupController,
+    MessageController,
+    PlanApprovalController,
+)
+from malibu.tui.managers import DisplayLedger, InterruptKind, InterruptManager, MessageHistory
+from malibu.tui.protocol import TUI_INTERRUPT_METHOD
+from malibu.tui.serialization import deserialize_session_update
+from malibu.tui.screens.command_palette import CommandPaletteScreen
+from malibu.tui.screens.session_browser import SessionBrowserScreen
+from malibu.tui.services import ConsoleBufferManager, HistoryHydrator, SpinnerService, UpdateProcessor
+from malibu.tui.widgets.autocomplete_popup import AutocompletePopup
+from malibu.tui.widgets.chat_input import ChatTextArea, CompletionItem
+from malibu.tui.widgets.conversation.log import ConversationLog
 from malibu.tui.widgets.plan_panel import PlanPanel
 from malibu.tui.widgets.status_bar import StatusBar
-
-if TYPE_CHECKING:
-    pass
-
-
-# ---------------------------------------------------------------------------
-# ChatScreen
-# ---------------------------------------------------------------------------
+from malibu.tui.widgets.welcome_dock import WelcomeDock
 
 
 class ChatScreen(Screen):
-    """Primary conversation screen."""
+    """Main terminal shell screen."""
 
     BINDINGS = [
-        Binding("ctrl+p", "toggle_plan", "Toggle Plan", show=True),
+        Binding("ctrl+shift+p", "toggle_plan", "Plan", show=True),
         Binding("ctrl+l", "clear_messages", "Clear", show=True),
+        Binding("ctrl+k", "open_command_palette", "Commands", show=True),
+        Binding("ctrl+o", "open_session_picker", "Sessions", show=True),
+        Binding("end", "jump_to_latest", "Latest", show=False),
     ]
 
     DEFAULT_CSS = """
     ChatScreen {
         layout: vertical;
+        background: $background;
+        color: $foreground;
     }
-    #chat-body {
+    #shell-body {
         height: 1fr;
+        min-height: 0;
+        layout: horizontal;
+    }
+    #conversation-column {
+        width: 1fr;
+        height: 1fr;
+        min-height: 0;
+    }
+    #welcome-dock {
+        width: 1fr;
+    }
+    #composer {
+        height: 6;
+        min-height: 6;
+        max-height: 16;
+        layout: vertical;
+        padding: 0 1 1 1;
+        background: $background;
+    }
+    #composer-status {
+        height: 1;
+        padding: 0 1;
+        color: $foreground-muted;
     }
     """
 
-    def compose(self) -> ComposeResult:
-        yield StatusBar()
-        with Horizontal(id="chat-body"):
-            yield MessageList()
-            yield PlanPanel()
-        yield ChatInput()
-        yield Footer()
+    def __init__(self) -> None:
+        super().__init__()
+        self.display_ledger = DisplayLedger()
+        self.history = MessageHistory()
+        self.interrupt_manager = InterruptManager()
+        self.console_buffers = ConsoleBufferManager()
+        self.spinner_service = SpinnerService()
 
-    # -- ACP update routing ------------------------------------------------
+        self.status_bar: StatusBar | None = None
+        self.welcome_dock: WelcomeDock | None = None
+        self.conversation: ConversationLog | None = None
+        self.plan_panel: PlanPanel | None = None
+        self.chat_input: ChatTextArea | None = None
+        self.autocomplete_popup: AutocompletePopup | None = None
+        self.composer: VerticalGroup | None = None
+        self.composer_status: Static | None = None
+
+        self.update_processor = UpdateProcessor(self)
+        self.history_hydrator = HistoryHydrator(self.update_processor)
+        self.message_controller = MessageController(self)
+        self.autocomplete_controller: AutocompletePopupController | None = None
+        self.approval_controller = ApprovalPromptController(self, self.interrupt_manager)
+        self.plan_controller = PlanApprovalController(self, self.interrupt_manager)
+        self.ask_user_controller = AskUserPromptController(self, self.interrupt_manager)
+
+        self._available_commands: list[str] = []
+        self._config_values: dict[str, str] = {}
+        self._session_candidates: list[dict[str, Any]] = []
+        self._model_candidates: list[str] = []
+        self._mode_candidates: list[dict[str, str]] = [
+            {
+                "id": mode.id,
+                "name": mode.name,
+                "description": mode.description or "",
+            }
+            for mode in DEFAULT_MODES.available_modes
+        ]
+        self._spinner_timer = None
+        self._shell_ready = True
+        self._activity_started = False
+
+    def compose(self) -> ComposeResult:
+        self.status_bar = StatusBar(cwd=str(Path.cwd()))
+        self.welcome_dock = WelcomeDock(cwd=str(Path.cwd()))
+        self.conversation = ConversationLog()
+        self.plan_panel = PlanPanel()
+        self.autocomplete_popup = AutocompletePopup(max_visible_rows=6)
+        self.chat_input = ChatTextArea(
+            history=self.history,
+            completion_provider=self._build_completions,
+        )
+        self.composer = VerticalGroup(id="composer")
+        self.composer_status = Static(id="composer-status")
+        yield self.status_bar
+        yield self.welcome_dock
+        with Horizontal(id="shell-body"):
+            with Vertical(id="conversation-column"):
+                yield self.conversation
+            yield self.plan_panel
+        with self.composer:
+            yield self.chat_input
+            yield self.autocomplete_popup
+            yield self.composer_status
+
+    def on_mount(self) -> None:
+        self.autocomplete_controller = AutocompletePopupController(self.query_one(AutocompletePopup))
+        self.status_bar = self.query_one(StatusBar)
+        self.welcome_dock = self.query_one(WelcomeDock)
+        self.conversation = self.query_one(ConversationLog)
+        self.plan_panel = self.query_one(PlanPanel)
+        self.chat_input = self.query_one(ChatTextArea)
+        self.composer_status = self.query_one("#composer-status", Static)
+        self._spinner_timer = self.set_interval(0.12, self._tick_spinner)
+        self.chat_input.focus()
+        self.status_bar.set_cwd(self.app.cwd)  # type: ignore[attr-defined]
+        if self.welcome_dock is not None:
+            self.welcome_dock.set_cwd(self.app.cwd)  # type: ignore[attr-defined]
+        self._refresh_composer_height(False)
+        self._render_composer_status()
+
+    def load_bootstrap(self, payload: dict[str, Any]) -> None:
+        self._session_candidates = list(payload.get("sessions", []))
+        self._model_candidates = [str(item) for item in payload.get("models", [])]
+        self._available_commands = [str(item) for item in payload.get("available_commands", [])]
+        title = payload.get("session_title")
+        if title and self.status_bar is not None:
+            self.status_bar.set_session_title(str(title))
+        if title and self.welcome_dock is not None:
+            self.welcome_dock.set_session_title(str(title))
+        mode = payload.get("mode")
+        if mode and self.status_bar is not None:
+            self.status_bar.set_mode(str(mode))
+        if mode and self.welcome_dock is not None:
+            self.welcome_dock.set_mode(str(mode))
+        model = payload.get("model")
+        if model and self.status_bar is not None:
+            self.status_bar.set_model(str(model))
+        if model and self.welcome_dock is not None:
+            self.welcome_dock.set_model(str(model))
+        config_values = payload.get("config", {})
+        if isinstance(config_values, dict):
+            self._config_values = {str(key): str(value) for key, value in config_values.items()}
+
+        hydrated: list[dict[str, Any]] = []
+        for event in payload.get("history", []):
+            kind = event.get("kind")
+            raw_payload = event.get("payload", {})
+            if kind == "session_update" and isinstance(raw_payload, dict):
+                hydrated.append({"kind": kind, "payload": deserialize_session_update(raw_payload)})
+            elif kind == "tui_event" and isinstance(raw_payload, dict):
+                hydrated.append({"kind": kind, "payload": raw_payload})
+        self.history.replace_events(hydrated)
+        self.history_hydrator.hydrate(hydrated)
+        self.set_shell_ready(True)
+        if hydrated:
+            self._mark_activity_started()
+
+    # ------------------------------------------------------------------
+    # Public API used by controllers
+    # ------------------------------------------------------------------
+
+    async def dispatch_prompt(self, text: str) -> None:
+        await self.app.dispatch_prompt(text)  # type: ignore[attr-defined]
+
+    def start_processing(self, label: str) -> None:
+        self.spinner_service.start("agent", label)
+        self._tick_spinner()
+
+    def stop_processing(self) -> None:
+        self.spinner_service.stop("agent")
+        self.display_ledger.complete_turn()
+        if self.status_bar is not None:
+            self.status_bar.set_spinner("")
+
+    def update_queue_depth(self, depth: int) -> None:
+        if self.status_bar is not None:
+            self.status_bar.set_queue_depth(depth)
+        self._render_composer_status()
+
+    def on_user_message_chunk(self, update: UserMessageChunk, *, from_history: bool = False) -> None:
+        content = update.content
+        if not isinstance(content, TextContentBlock) or self.conversation is None:
+            return
+        self._mark_activity_started()
+        if from_history:
+            self.display_ledger.replay("user", content.text)
+            self.conversation.add_user_message(content.text)
+            return
+        if self.display_ledger.begin_user_turn(content.text):
+            self.conversation.add_user_message(content.text)
+
+    def on_agent_message_chunk(self, update: AgentMessageChunk, *, from_history: bool = False) -> None:
+        content = update.content
+        if not isinstance(content, TextContentBlock) or self.conversation is None:
+            return
+        self._mark_activity_started()
+        if from_history:
+            self.display_ledger.replay("assistant", content.text)
+            self.conversation.add_assistant_message(content.text)
+            return
+        if self.display_ledger.allow_assistant_text(content.text):
+            self.conversation.add_assistant_message(content.text)
+
+    def on_thought_chunk(self, update: AgentThoughtChunk) -> None:
+        content = update.content
+        if self.conversation is not None and isinstance(content, TextContentBlock):
+            self._mark_activity_started()
+            self.conversation.add_thought(content.text)
+
+    def on_tool_call_start(self, update: ToolCallStart) -> None:
+        if self.conversation is None:
+            return
+        self._mark_activity_started()
+        self.conversation.start_tool_call(
+            update.tool_call_id,
+            update.title or "Tool",
+            kind=update.kind or "tool",
+            status=update.status or "pending",
+            raw_input=getattr(update, "raw_input", None),
+        )
+        self.spinner_service.start(update.tool_call_id, update.title or "Tool")
+
+    def on_tool_call_progress(self, update: ToolCallProgress) -> None:
+        if self.conversation is None:
+            return
+        output = update.raw_output
+        if output is None and update.content:
+            output = self.console_buffers.stringify_content(update.content)
+        if output is not None:
+            text = self.console_buffers.update(update.tool_call_id, str(output))
+            preview, truncated = self.console_buffers.preview(update.tool_call_id, fallback=text)
+        else:
+            preview, truncated = "", False
+        self.conversation.update_tool_call(
+            update.tool_call_id,
+            title=update.title,
+            status=update.status,
+            raw_input=update.raw_input,
+            output_text=preview if truncated else (self.console_buffers.get(update.tool_call_id) or preview),
+            truncated=truncated,
+        )
+        if update.status in {"completed", "failed"}:
+            self.spinner_service.stop(update.tool_call_id)
+
+    def on_plan_update(self, update: AgentPlanUpdate) -> None:
+        if self.plan_panel is not None:
+            self.plan_panel.set_plan(update)
+        self._render_composer_status()
+
+    def on_mode_update(self, update: CurrentModeUpdate) -> None:
+        if self.status_bar is not None:
+            self.status_bar.set_mode(update.current_mode_id)
+        if self.welcome_dock is not None:
+            self.welcome_dock.set_mode(update.current_mode_id)
+        self._render_composer_status()
+
+    def on_session_info_update(self, update: SessionInfoUpdate) -> None:
+        if self.status_bar is not None and getattr(update, "title", None):
+            self.status_bar.set_session_title(update.title)
+        if self.welcome_dock is not None and getattr(update, "title", None):
+            self.welcome_dock.set_session_title(update.title)
+
+    def on_config_option_update(self, update: ConfigOptionUpdate) -> None:
+        self._config_values = {}
+        for option in update.config_options:
+            root = option.root
+            self._config_values[root.id] = str(root.current_value)
+            if root.id == "llm_model":
+                self._model_candidates = [str(item.value) for item in getattr(root, "options", [])]
+                if self.status_bar is not None:
+                    self.status_bar.set_model(str(root.current_value))
+                if self.welcome_dock is not None:
+                    self.welcome_dock.set_model(str(root.current_value))
+
+    def on_available_commands_update(self, update: AvailableCommandsUpdate) -> None:
+        self._available_commands = [command.command for command in update.available_commands]
+
+    def on_usage_update(self, update: UsageUpdate) -> None:
+        if self.status_bar is not None:
+            self.status_bar.set_usage(
+                getattr(update, "input_tokens", 0) or 0,
+                getattr(update, "output_tokens", 0) or 0,
+            )
+
+    def on_tool_group_event(self, payload: dict[str, Any], *, from_history: bool = False) -> None:
+        if self.conversation is None:
+            return
+        title = str(payload.get("title", "Tool group"))
+        items = [str(item) for item in payload.get("items", [])]
+        if items:
+            self.conversation.add_tool_group(title, items)
+
+    def on_status_event(self, payload: dict[str, Any]) -> None:
+        if self.status_bar is not None:
+            spinner = str(payload.get("spinner", "")).strip()
+            if spinner:
+                self.status_bar.set_spinner(spinner)
+
+    def on_notification_event(self, payload: dict[str, Any]) -> None:
+        if self.conversation is not None:
+            self.conversation.add_system_message(
+                str(payload.get("message", "")),
+                title=str(payload.get("title", "Notice")),
+                border_style="#475569",
+            )
+
+    def on_session_metadata_event(self, payload: dict[str, Any]) -> None:
+        if self.status_bar is not None and "model" in payload:
+            self.status_bar.set_model(str(payload["model"]))
+        if self.welcome_dock is not None and "model" in payload:
+            self.welcome_dock.set_model(str(payload["model"]))
+
+    # ------------------------------------------------------------------
+    # Message bridge handlers
+    # ------------------------------------------------------------------
 
     @on(SessionUpdateMessage)
     def handle_session_update(self, message: SessionUpdateMessage) -> None:
-        """Route an ACP session update to the appropriate widget."""
-        update = message.update
-        msg_list = self.query_one(MessageList)
-        status_bar = self.query_one(StatusBar)
-        plan_panel = self.query_one(PlanPanel)
+        self.update_processor.enqueue_session_update(message.update)
 
-        if isinstance(update, AgentMessageChunk):
-            content = update.content
-            if isinstance(content, TextContentBlock):
-                msg_list.append_assistant_text(content.text)
-            elif isinstance(content, ImageContentBlock):
-                msg_list.append_assistant_text("[image]")
-            else:
-                msg_list.append_assistant_text(str(content))
+    @on(ExtensionNotificationMessage)
+    def handle_extension_notification(self, message: ExtensionNotificationMessage) -> None:
+        self.update_processor.enqueue_tui_event(message.params)
 
-        elif isinstance(update, AgentThoughtChunk):
-            content = update.content
-            if isinstance(content, TextContentBlock):
-                msg_list.append_thought(content.text)
+    @on(ExtensionRequestMessage)
+    def handle_extension_request(self, message: ExtensionRequestMessage) -> None:
+        if message.method != TUI_INTERRUPT_METHOD:
+            if not message.future.done():
+                message.future.set_result({})
+            return
 
-        elif isinstance(update, ToolCallStart):
-            tool_id = update.tool_call_id or "unknown"
-            kind = update.kind or "tool"
-            status = update.status or "pending"
-            msg_list.add_tool_call(tool_id, update.title, kind, status)
+        async def _resolve() -> None:
+            try:
+                payload = message.params
+                prompt = payload.get("prompt", {})
+                prompt_type = str(prompt.get("type", "tool_approval"))
+                if prompt_type == "ask_user":
+                    result = await self.ask_user_controller.start(prompt)
+                elif prompt_type == "plan_review":
+                    result = await self.plan_controller.start(prompt)
+                else:
+                    result = await self.approval_controller.start(prompt)
+                if not message.future.done():
+                    message.future.set_result(result)
+            except Exception as exc:
+                if not message.future.done():
+                    message.future.set_exception(exc)
 
-        elif isinstance(update, ToolCallProgress):
-            tool_id = update.tool_call_id or "unknown"
-            msg_list.update_tool_call(tool_id, update)
-
-        elif isinstance(update, AgentPlanUpdate):
-            plan_panel.set_plan(update)
-            if not plan_panel.visible:
-                plan_panel.visible = True
-
-        elif isinstance(update, UsageUpdate):
-            input_tokens = getattr(update, "input_tokens", 0) or 0
-            output_tokens = getattr(update, "output_tokens", 0) or 0
-            status_bar.set_usage(input_tokens, output_tokens)
-
-        elif isinstance(update, CurrentModeUpdate):
-            status_bar.set_mode(update.current_mode_id)
-
-        elif isinstance(update, SessionInfoUpdate):
-            title = getattr(update, "title", None)
-            if title:
-                status_bar.set_session_title(title)
-
-        elif isinstance(update, UserMessageChunk):
-            content = update.content
-            if isinstance(content, TextContentBlock):
-                msg_list.append_user_message(content.text)
-
-        elif isinstance(update, AvailableCommandsUpdate):
-            if update.available_commands:
-                cmds = ", ".join(c.command for c in update.available_commands)
-                msg_list.mount(
-                    Static(f"[dim]Available commands: {cmds}[/]", classes="info")
-                )
-
-        elif isinstance(update, ConfigOptionUpdate):
-            for opt in update.config_options:
-                inner = opt.root
-                msg_list.mount(
-                    Static(
-                        f"[dim]Config: {inner.id} = {inner.current_value}[/]",
-                        classes="info",
-                    )
-                )
-
-    # -- Permission requests -----------------------------------------------
+        self.run_worker(_resolve(), exclusive=False)
 
     @on(PermissionRequestMessage)
     def handle_permission_request(self, message: PermissionRequestMessage) -> None:
-        """Push the ApprovalModal and resolve the bridge future with the result."""
-        from acp.schema import (
-            AllowedOutcome,
-            DeniedOutcome,
-            RequestPermissionResponse,
-        )
-        from malibu.tui.widgets.approval_modal import ApprovalModal
+        from acp.schema import AllowedOutcome, DeniedOutcome, RequestPermissionResponse
 
-        tool_name = message.tool_call.title or "tool"
-        tool_input = message.tool_call.raw_input
-
-        async def _push_and_resolve() -> None:
-            result = await self.app.push_screen_wait(
-                ApprovalModal(tool_name, tool_input)
-            )
+        async def _resolve() -> None:
+            prompt = {
+                "type": "tool_approval",
+                "title": message.tool_call.title or "Tool review",
+                "subtitle": message.tool_call.title or "Tool review",
+                "tool_name": message.tool_call.title or "tool",
+                "tool_args": message.tool_call.raw_input,
+                "allowed_decisions": ["approve", "reject"],
+                "can_always_allow": True,
+            }
+            result = await self.approval_controller.start(prompt)
             if message.future.done():
                 return
-            # Map ApprovalResult → ACP RequestPermissionResponse
-            if result.action in ("approve", "always_allow"):
-                # Find the matching option_id from the permission options
-                option_id = "approve"
-                if result.action == "always_allow":
-                    option_id = "approve_always"
-                for opt in message.options:
-                    if result.action == "always_allow" and "always" in opt.name.lower():
-                        option_id = opt.option_id
-                        break
-                    elif result.action == "approve" and "once" in opt.name.lower():
-                        option_id = opt.option_id
-                        break
-                if not option_id and message.options:
-                    option_id = message.options[0].option_id
+            remember = result.get("remember", {})
+            decision = result.get("decision", {})
+            if remember.get("type") == "always_allow":
+                option_id = next(
+                    (option.option_id for option in message.options if "always" in option.option_id),
+                    "approve_always",
+                )
                 message.future.set_result(
                     RequestPermissionResponse(
                         outcome=AllowedOutcome(outcome="selected", option_id=option_id)
                     )
                 )
-            else:
+                return
+            if decision.get("type") == "approve":
+                option_id = next(
+                    (option.option_id for option in message.options if "approve" in option.option_id),
+                    "approve",
+                )
                 message.future.set_result(
                     RequestPermissionResponse(
-                        outcome=DeniedOutcome(outcome="cancelled")
+                        outcome=AllowedOutcome(outcome="selected", option_id=option_id)
                     )
                 )
+                return
+            message.future.set_result(
+                RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+            )
 
-        self.app.call_later(_push_and_resolve)
+        self.run_worker(_resolve(), exclusive=False)
 
-    # -- Chat input --------------------------------------------------------
+    @on(ChatTextArea.Submitted)
+    def handle_chat_submitted(self, message: ChatTextArea.Submitted) -> None:
+        if self.interrupt_manager.active_kind is InterruptKind.ASK_USER:
+            if self.ask_user_controller.submit_answer(message.text):
+                self.chat_input.focus()  # type: ignore[union-attr]
+                self.chat_input.load_text("")  # type: ignore[union-attr]
+            return
+        self.run_worker(self.message_controller.submit(message.text), exclusive=False)
 
-    @on(ChatInput.Submitted)
-    def handle_chat_submitted(self, message: ChatInput.Submitted) -> None:
-        """Forward submitted text to the application's send_prompt method."""
-        self.query_one(MessageList).append_user_message(message.text)
-        if hasattr(self.app, "send_prompt"):
-            self.app.send_prompt(message.text)  # type: ignore[attr-defined]
+    @on(ChatTextArea.CompletionsChanged)
+    def handle_completions_changed(self, message: ChatTextArea.CompletionsChanged) -> None:
+        if self.autocomplete_controller is not None:
+            self.autocomplete_controller.update(message.items, message.selected)
+        self._refresh_composer_height(bool(message.items))
 
-    # -- Key bindings ------------------------------------------------------
+    def on_key(self, event: Any) -> None:
+        controller = self.interrupt_manager.controller
+        if controller is not None and hasattr(controller, "handle_key"):
+            if controller.handle_key(event.key):
+                event.stop()
+                event.prevent_default()
+
+    # ------------------------------------------------------------------
+    # Bindings and shell helpers
+    # ------------------------------------------------------------------
 
     def action_toggle_plan(self) -> None:
-        self.query_one(PlanPanel).toggle()
+        if self.plan_panel is not None:
+            self.plan_panel.toggle()
 
     def action_clear_messages(self) -> None:
-        self.query_one(MessageList).clear_messages()
+        if self.conversation is not None:
+            self.conversation.clear_log()
+        if self.plan_panel is not None:
+            self.plan_panel.clear_plan()
+        self._activity_started = False
+        if self.welcome_dock is not None:
+            self.welcome_dock.reveal()
+        self._render_composer_status()
+
+    def action_jump_to_latest(self) -> None:
+        if self.conversation is not None:
+            self.conversation.auto_follow = True
+            self.conversation.scroll_latest()
+
+    def action_open_command_palette(self) -> None:
+        async def _open() -> None:
+            commands = [
+                (f"/{name}", command.description)
+                for name, command in self.app.command_registry.all().items()  # type: ignore[attr-defined]
+            ]
+            selected = await self.app.push_screen_wait(CommandPaletteScreen(commands))  # type: ignore[attr-defined]
+            if selected and self.chat_input is not None:
+                self.chat_input.load_text(selected)
+                self.chat_input.focus()
+
+        self.run_worker(_open(), exclusive=False)
+
+    def action_open_session_picker(self) -> None:
+        async def _open() -> None:
+            sessions = await self.app.conn.list_sessions(cwd=self.app.cwd)  # type: ignore[attr-defined]
+            items = [
+                {
+                    "session_id": session.session_id,
+                    "title": session.title or f"Session {session.session_id[:8]}",
+                    "cwd": session.cwd,
+                    "mode": "",
+                }
+                for session in sessions.sessions
+            ]
+            selected = await self.app.push_screen_wait(SessionBrowserScreen(items))  # type: ignore[attr-defined]
+            if selected == "__new__":
+                await self.app.new_session()  # type: ignore[attr-defined]
+            elif selected:
+                await self.app.resume_session(selected)  # type: ignore[attr-defined]
+
+        self.run_worker(_open(), exclusive=False)
+
+    def _tick_spinner(self) -> None:
+        if self.status_bar is not None:
+            self.status_bar.set_spinner(self.spinner_service.next_frame())
+        self._render_composer_status()
+
+    def _refresh_composer_height(self, expanded: bool) -> None:
+        if self.composer is None:
+            return
+        self.composer.styles.height = 15 if expanded else 6
+
+    def refresh_theme(self) -> None:
+        if self.status_bar is not None:
+            self.status_bar.refresh_theme()
+        if self.welcome_dock is not None:
+            self.welcome_dock.refresh_theme()
+        if self.conversation is not None:
+            self.conversation.refresh_theme()
+        if self.plan_panel is not None:
+            self.plan_panel.refresh_theme()
+        if self.autocomplete_popup is not None:
+            self.autocomplete_popup.refresh_theme()
+        self._render_composer_status()
+
+    @property
+    def shell_ready(self) -> bool:
+        return self._shell_ready
+
+    def set_shell_ready(self, ready: bool) -> None:
+        self._shell_ready = ready
+        if self.welcome_dock is not None:
+            self.welcome_dock.set_ready(ready)
+        self._render_composer_status()
+
+    def record_local_submission(self, text: str) -> None:
+        if not text.strip() or self.conversation is None:
+            return
+        self._mark_activity_started()
+        if self.display_ledger.begin_user_turn(text):
+            self.conversation.add_user_message(text)
+
+    def _mark_activity_started(self) -> None:
+        if self._activity_started:
+            return
+        self._activity_started = True
+        if self.conversation is not None:
+            self.conversation.set_welcome_message(
+                cwd=getattr(self.app, "cwd", str(Path.cwd())),
+                session_title=self.status_bar.session_title if self.status_bar is not None else "New Session",
+                mode_name=self.status_bar.mode_name if self.status_bar is not None else "accept_edits",
+                model_id=self.status_bar.model_id if self.status_bar is not None else "",
+                ready=self._shell_ready,
+            )
+        if self.welcome_dock is not None:
+            self.welcome_dock.dismiss()
+
+    def _render_composer_status(self) -> None:
+        if self.composer_status is None:
+            return
+        theme = getattr(self.app, "current_theme", None)
+        accent = getattr(theme, "accent", None) or getattr(theme, "primary", None) or "#D7A77A"
+        foreground = getattr(theme, "foreground", None) or "#F3EBDD"
+        muted = getattr(theme, "variables", {}).get("foreground-muted", "#AA9988") if theme else "#AA9988"
+        warning = getattr(theme, "warning", None) or "#C99A52"
+        success = getattr(theme, "success", None) or "#879A63"
+
+        mode_name = self.status_bar.mode_name if self.status_bar is not None else "accept_edits"
+        queue_depth = self.status_bar.queue_depth if self.status_bar is not None else 0
+        spinner_text = self.status_bar.spinner_text if self.status_bar is not None else ""
+        state_text = spinner_text or ("ready" if self._shell_ready else "starting local agent...")
+        state_style = success if self._shell_ready and not spinner_text else warning
+
+        parts = [
+            f"[{muted}]mode[/] [{accent}]{mode_name}[/]",
+            f"[{muted}]status[/] [{state_style}]{state_text}[/]",
+        ]
+        if queue_depth:
+            parts.append(f"[{warning}]queued {queue_depth}[/]")
+        else:
+            parts.append(f"[{muted}]press / for commands[/]")
+        parts.append(f"[{muted}]shift+enter newline[/]")
+        self.composer_status.update("  •  ".join(parts))
+
+    def _build_completions(self, text: str, cursor: int) -> list[CompletionItem]:
+        prefix_text = text[:cursor]
+        if prefix_text.lstrip().startswith("/"):
+            slash_items = self._build_slash_completions(prefix_text)
+            if slash_items:
+                return slash_items[:24]
+
+        token = prefix_text.split()[-1] if prefix_text.split() else ""
+        if token.startswith(".") or token.startswith("/") or "/" in token:
+            return self._build_path_completions(token, cursor - len(token), cursor)[:24]
+        return []
+
+    def _build_slash_completions(self, prefix_text: str) -> list[CompletionItem]:
+        body = prefix_text.lstrip()
+        command_offset = len(prefix_text) - len(body)
+        command_part, separator, _remainder = body.partition(" ")
+        command_name = command_part.lstrip("/")
+
+        if not separator:
+            replace_start = command_offset
+            replace_end = command_offset + len(command_part)
+            items: list[CompletionItem] = []
+            for name, command in sorted(self.app.command_registry.all().items()):  # type: ignore[attr-defined]
+                if command_name and not name.startswith(command_name):
+                    continue
+                items.append(
+                    CompletionItem(
+                        label=f"/{name}",
+                        value=f"/{name} ",
+                        meta=command.description,
+                        replace_start=replace_start,
+                        replace_end=replace_end,
+                    )
+                )
+            return items
+
+        arg_text = body[len(command_part) :]
+        args = arg_text.split()
+        trailing_space = prefix_text.endswith(" ")
+        current_fragment = "" if trailing_space else (args[-1] if args else "")
+        current_index = len(args) if trailing_space else max(len(args) - 1, 0)
+        replace_end = len(prefix_text)
+        replace_start = replace_end - len(current_fragment)
+
+        if command_name == "mode":
+            return self._build_mode_completions(current_fragment, replace_start, replace_end)
+        if command_name == "model" and current_index == 0:
+            return self._build_model_completions(current_fragment, replace_start, replace_end)
+        if command_name == "session":
+            return self._build_session_completions(args, current_index, current_fragment, replace_start, replace_end)
+        if command_name == "config" and current_index == 0:
+            return self._build_config_completions(current_fragment, replace_start, replace_end)
+        if current_fragment.startswith(".") or current_fragment.startswith("/") or "/" in current_fragment:
+            return self._build_path_completions(current_fragment, replace_start, replace_end)
+        return []
+
+    def _build_mode_completions(
+        self,
+        fragment: str,
+        replace_start: int,
+        replace_end: int,
+    ) -> list[CompletionItem]:
+        items: list[CompletionItem] = []
+        lowered = fragment.lower()
+        for mode in self._mode_candidates:
+            mode_id = mode["id"]
+            if lowered and not mode_id.startswith(lowered):
+                continue
+            items.append(
+                CompletionItem(
+                    label=mode_id,
+                    value=f"{mode_id} ",
+                    meta=mode["description"],
+                    replace_start=replace_start,
+                    replace_end=replace_end,
+                )
+            )
+        return items
+
+    def _build_model_completions(
+        self,
+        fragment: str,
+        replace_start: int,
+        replace_end: int,
+    ) -> list[CompletionItem]:
+        return [
+            CompletionItem(
+                label=model,
+                value=f"{model} ",
+                meta="model",
+                replace_start=replace_start,
+                replace_end=replace_end,
+            )
+            for model in self._model_candidates
+            if not fragment or model.startswith(fragment)
+        ]
+
+    def _build_session_completions(
+        self,
+        args: list[str],
+        current_index: int,
+        fragment: str,
+        replace_start: int,
+        replace_end: int,
+    ) -> list[CompletionItem]:
+        if current_index == 0:
+            subcommands = {
+                "list": "browse saved sessions",
+                "new": "start a fresh session",
+                "resume": "resume an existing session",
+                "fork": "branch from the current session",
+            }
+            return [
+                CompletionItem(
+                    label=name,
+                    value=f"{name} ",
+                    meta=description,
+                    replace_start=replace_start,
+                    replace_end=replace_end,
+                )
+                for name, description in subcommands.items()
+                if not fragment or name.startswith(fragment)
+            ]
+        if args and args[0] == "resume" and current_index == 1:
+            items: list[CompletionItem] = []
+            for session in self._session_candidates:
+                session_id = str(session.get("session_id", ""))
+                title = str(session.get("title", "")) or "session"
+                if fragment and not session_id.startswith(fragment):
+                    continue
+                items.append(
+                    CompletionItem(
+                        label=session_id,
+                        value=f"{session_id} ",
+                        meta=title,
+                        replace_start=replace_start,
+                        replace_end=replace_end,
+                    )
+                )
+            return items
+        return []
+
+    def _build_config_completions(
+        self,
+        fragment: str,
+        replace_start: int,
+        replace_end: int,
+    ) -> list[CompletionItem]:
+        return [
+            CompletionItem(
+                label=key,
+                value=f"{key} ",
+                meta=str(value),
+                replace_start=replace_start,
+                replace_end=replace_end,
+            )
+            for key, value in sorted(self._config_values.items())
+            if not fragment or key.startswith(fragment)
+        ]
+
+    def _build_path_completions(
+        self,
+        token: str,
+        replace_start: int,
+        replace_end: int,
+    ) -> list[CompletionItem]:
+        base = Path(self.app.cwd)  # type: ignore[attr-defined]
+        stem = token.replace('"', "")
+        parent = (base / stem).parent if stem else base
+        prefix = (base / stem).name
+        items: list[CompletionItem] = []
+        if not parent.exists():
+            return items
+        for path in sorted(parent.iterdir())[:20]:
+            candidate = path.name
+            if prefix and not candidate.startswith(prefix):
+                continue
+            value = str((Path(stem).parent / candidate).as_posix())
+            if path.is_dir():
+                value = f"{value}/"
+            items.append(
+                CompletionItem(
+                    label=value,
+                    value=value,
+                    meta="path",
+                    replace_start=replace_start,
+                    replace_end=replace_end,
+                )
+            )
+        return items

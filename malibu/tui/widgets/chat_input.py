@@ -1,147 +1,210 @@
-"""Chat input widget with Enter-to-submit, command history, and slash-command detection."""
+"""Rich chat input widget with history, large paste collapsing, and autocomplete."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable
+
+from textual import events
 from textual.message import Message
 from textual.widgets import TextArea
-from textual import events
+
+if TYPE_CHECKING:
+    from malibu.tui.managers.message_history import MessageHistory
 
 
-class ChatInput(TextArea):
-    """A text input for composing messages.
+@dataclass(frozen=True)
+class CompletionItem:
+    """Completion row plus the exact replacement range for insertion."""
 
-    * **Enter** submits the current text (posts ``ChatInput.Submitted``).
-    * **Shift+Enter** inserts a newline.
-    * **Up / Down** arrows navigate command history when the input is empty.
-    * Text starting with ``/`` is treated as a slash command.
-    """
+    label: str
+    value: str
+    meta: str
+    replace_start: int
+    replace_end: int
+
+
+CompletionProvider = Callable[[str, int], list[CompletionItem]]
+
+
+class ChatTextArea(TextArea):
+    """Text area with queued-completion updates and multiline submit rules."""
 
     DEFAULT_CSS = """
-    ChatInput {
-        height: auto;
-        min-height: 3;
+    ChatTextArea {
+        height: 4;
+        min-height: 4;
         max-height: 10;
-        border: solid $primary;
-        margin: 0 1;
+        border: solid $panel-lighten-1;
+        padding: 0 1;
+        background: $surface;
+        color: $foreground;
+    }
+    ChatTextArea:focus {
+        border: solid $accent;
+        background: $surface-active;
     }
     """
 
-    # ---- custom messages ----
-
     class Submitted(Message):
-        """Posted when the user submits input (presses Enter)."""
-
         def __init__(self, text: str) -> None:
             super().__init__()
             self.text = text
 
-        @property
-        def is_command(self) -> bool:
-            """Return ``True`` if the submitted text is a slash command."""
-            return self.text.startswith("/")
-
-    # ---- state ----
+    class CompletionsChanged(Message):
+        def __init__(self, items: list[tuple[str, str]], selected: int | None) -> None:
+            super().__init__()
+            self.items = items
+            self.selected = selected
 
     def __init__(
         self,
         *,
-        name: str | None = None,
-        id: str | None = None,
-        classes: str | None = None,
+        history: "MessageHistory | None" = None,
+        completion_provider: CompletionProvider | None = None,
+        paste_threshold: int = 400,
     ) -> None:
-        super().__init__(name=name, id=id, classes=classes)
-        self._history: list[str] = []
-        self._history_index: int = -1
-        self._draft: str = ""
+        super().__init__(id="chat-input", placeholder="Ask Malibu anything or press / for commands")
+        self._history = history
+        self._completion_provider = completion_provider
+        self._paste_threshold = paste_threshold
+        self._paste_replacements: dict[str, str] = {}
+        self._paste_index = 0
+        self._completion_timer = None
+        self._completion_rows: list[CompletionItem] = []
+        self._selected_completion: int | None = None
 
-    # ---- key handling ----
+    def set_completion_provider(self, provider: CompletionProvider | None) -> None:
+        self._completion_provider = provider
 
-    async def _on_key(self, event: events.Key) -> None:  # noqa: C901
-        # Modifier+Enter variants insert a newline in this Textual version.
+    def watch_text(self, _old: str, _new: str) -> None:
+        self._schedule_completion_refresh()
+
+    def on_text_area_changed(self, _event: TextArea.Changed) -> None:
+        self._schedule_completion_refresh()
+
+    def on_text_area_selection_changed(self, _event: TextArea.SelectionChanged) -> None:
+        self._schedule_completion_refresh()
+
+    async def _on_key(self, event: events.Key) -> None:
         if self._should_insert_newline(event):
             return
 
-        # Plain Enter => submit
+        if self._completion_rows and event.key in {"up", "down"} and not self.text.strip().count("\n"):
+            event.prevent_default()
+            event.stop()
+            self._move_completion(-1 if event.key == "up" else 1)
+            return
+
+        if self._completion_rows and event.key == "tab":
+            event.prevent_default()
+            event.stop()
+            self._accept_completion()
+            return
+
         if self._is_submit_key(event):
             event.prevent_default()
             event.stop()
             text = self.text.strip()
-            if text:
-                self._history.append(text)
-                self._history_index = -1
-                self._draft = ""
-                self.clear()
-                self.post_message(self.Submitted(text))
+            if not text:
+                return
+            resolved = self.resolve_large_pastes(text)
+            if self._history is not None:
+                self._history.record_input(resolved)
+            self.clear()
+            self.clear_large_pastes()
+            self._clear_completions()
+            self.post_message(self.Submitted(resolved))
             return
 
-        # Up arrow – navigate history backward when input is empty or already navigating
-        if event.key == "up":
-            if self.text.strip() == "" or self._history_index >= 0:
+        if event.key == "up" and self._history is not None and not self.text.strip():
+            previous = self._history.previous_input(self.text)
+            if previous is not None:
                 event.prevent_default()
                 event.stop()
-                self._navigate_history(-1)
-                return
+                self.load_text(previous)
+            return
 
-        # Down arrow – navigate history forward
-        if event.key == "down":
-            if self._history_index >= 0:
+        if event.key == "down" and self._history is not None:
+            newer = self._history.next_input()
+            if newer is not None:
                 event.prevent_default()
                 event.stop()
-                self._navigate_history(1)
-                return
+                self.load_text(newer)
+            return
+
+    def _on_paste(self, event: events.Paste) -> None:
+        pasted_text = event.text
+        if len(pasted_text) <= self._paste_threshold:
+            return
+        event.prevent_default()
+        event.stop()
+        self._paste_index += 1
+        token = f"[pasted-block-{self._paste_index}]"
+        self._paste_replacements[token] = pasted_text
+        self.insert(f"{token}\n")
 
     @staticmethod
     def _should_insert_newline(event: events.Key) -> bool:
-        """Return ``True`` when the key event should insert a newline.
-
-        Textual's ``Key`` event exposes combined modifier names and aliases
-        (for example ``shift+enter`` or ``ctrl+j``), not ``event.shift``.
-        """
-        newline_keys = {
-            "shift+enter",
-            "ctrl+j",
-            "alt+enter",
-            "ctrl+enter",
-            "newline",
-        }
+        newline_keys = {"shift+enter", "ctrl+j", "alt+enter", "ctrl+enter", "newline"}
         if event.key in newline_keys:
             return True
-        if any(alias in newline_keys for alias in event.aliases):
-            return True
-        return event.character == "\n"
+        return any(alias in newline_keys for alias in event.aliases)
 
     @classmethod
     def _is_submit_key(cls, event: events.Key) -> bool:
-        """Return ``True`` when Enter should submit the current input."""
         return event.key in {"enter", "return"} and not cls._should_insert_newline(event)
 
-    # ---- history helpers ----
+    def resolve_large_pastes(self, text: str) -> str:
+        for token, value in self._paste_replacements.items():
+            text = text.replace(token, value)
+        return text
 
-    def _navigate_history(self, direction: int) -> None:
-        """Move through command history.
+    def clear_large_pastes(self) -> None:
+        self._paste_replacements.clear()
 
-        ``direction`` is -1 for older, +1 for newer.
-        """
-        if not self._history:
+    def _schedule_completion_refresh(self) -> None:
+        if self._completion_timer is not None:
+            self._completion_timer.stop()
+        self._completion_timer = self.set_timer(0.08, self._refresh_completions)
+
+    def _refresh_completions(self) -> None:
+        self._completion_timer = None
+        if self._completion_provider is None or not self.text:
+            self._clear_completions()
             return
+        cursor = self.document.get_index_from_location(self.cursor_location)
+        rows = self._completion_provider(self.text, cursor)
+        self._completion_rows = rows
+        self._selected_completion = 0 if rows else None
+        self._emit_completions()
 
-        if self._history_index < 0:
-            # Entering history mode — save current text as draft
-            self._draft = self.text
-            self._history_index = len(self._history)
-
-        new_index = self._history_index + direction
-
-        if new_index < 0:
+    def _move_completion(self, delta: int) -> None:
+        if not self._completion_rows:
             return
+        current = self._selected_completion or 0
+        self._selected_completion = (current + delta) % len(self._completion_rows)
+        self._emit_completions()
 
-        if new_index >= len(self._history):
-            # Moved past newest entry — restore draft
-            self._history_index = -1
-            self.clear()
-            self.insert(self._draft)
+    def _accept_completion(self) -> None:
+        if self._selected_completion is None or not self._completion_rows:
             return
+        item = self._completion_rows[self._selected_completion]
+        updated = f"{self.text[:item.replace_start]}{item.value}{self.text[item.replace_end:]}"
+        self.load_text(updated)
+        target_index = item.replace_start + len(item.value)
+        self.cursor_location = self.document.get_location_from_index(target_index)
+        self._clear_completions()
 
-        self._history_index = new_index
-        self.clear()
-        self.insert(self._history[self._history_index])
+    def _emit_completions(self) -> None:
+        items = [(item.label, item.meta) for item in self._completion_rows]
+        self.post_message(self.CompletionsChanged(items, self._selected_completion))
+
+    def _clear_completions(self) -> None:
+        self._completion_rows = []
+        self._selected_completion = None
+        self.post_message(self.CompletionsChanged([], None))
+
+
+class ChatInput(ChatTextArea):
+    """Backward-compatible alias for the upgraded chat text area."""

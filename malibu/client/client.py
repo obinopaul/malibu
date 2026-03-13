@@ -78,6 +78,8 @@ class MalibuClient(Client):
         cwd: str,
         display_handler: Any | None = None,
         permission_handler: Any | None = None,
+        extension_method_handler: Any | None = None,
+        extension_notification_handler: Any | None = None,
     ) -> None:
         self._settings = settings
         self._cwd = cwd
@@ -87,6 +89,8 @@ class MalibuClient(Client):
         self._agent_conn: Agent | None = None
         self._display_handler = display_handler or display_session_update
         self._permission_handler = permission_handler or interactive_permission_prompt
+        self._extension_method_handler = extension_method_handler
+        self._extension_notification_handler = extension_notification_handler
 
     # ───────────────────────────────────────────────────────────
     # Connection lifecycle
@@ -224,8 +228,13 @@ class MalibuClient(Client):
     # ───────────────────────────────────────────────────────────
 
     async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        log.warning("ext_method_unhandled", method=method)
-        raise RequestError.method_not_found(method)
+        if self._extension_method_handler is None:
+            log.warning("ext_method_unhandled", method=method)
+            raise RequestError.method_not_found(method)
+        result = self._extension_method_handler(method, params)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     # ───────────────────────────────────────────────────────────
     # 11. ext_notification
@@ -233,6 +242,11 @@ class MalibuClient(Client):
 
     async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
         log.info("ext_notification", method=method)
+        if self._extension_notification_handler is None:
+            return
+        result = self._extension_notification_handler(method, params)
+        if inspect.isawaitable(result):
+            await result
 
     # ───────────────────────────────────────────────────────────
     # Cleanup

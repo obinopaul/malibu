@@ -1,28 +1,33 @@
-"""MalibuApp — main Textual application for the Malibu terminal coordinator.
-
-Manages the ACP connection lifecycle, slash-command dispatch, and screen
-navigation.  The heavy lifting is done by the :class:`TUIBridge` which routes
-ACP callbacks into Textual message posting.
-"""
+"""Main Textual application for the Malibu terminal shell."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
+import time
 from typing import Any
 
 from textual import work
 from textual.app import App
 from textual.binding import Binding
 
-from malibu.tui.bridge import SessionUpdateMessage, PermissionRequestMessage, TUIBridge
-from malibu.tui.commands import SlashCommandRegistry, create_default_registry, CommandContext
+from malibu.tui.bridge import (
+    ExtensionNotificationMessage,
+    ExtensionRequestMessage,
+    PermissionRequestMessage,
+    SessionUpdateMessage,
+    TUIBridge,
+)
+from malibu.tui.commands import CommandContext, SlashCommandRegistry, create_default_registry
+from malibu.tui.protocol import TUI_BOOTSTRAP_METHOD
 from malibu.tui.screens.chat import ChatScreen
 from malibu.tui.screens.welcome import WelcomeScreen
+from malibu.tui.theme import MALIBU_CLOUD_THEME
 
 
 class MalibuApp(App):
-    """Textual application wrapping the ACP agent client."""
+    """Composition root for the Malibu TUI."""
 
     TITLE = "Malibu"
     CSS_PATH = "app.tcss"
@@ -43,40 +48,53 @@ class MalibuApp(App):
     ) -> None:
         super().__init__()
         self._cwd = str(Path(cwd).resolve())
+        self._initial_prompt = initial_prompt
+        self._continue_session = continue_session
+        self._resume_session_id = resume_session_id
+        self._no_welcome = no_welcome
+
         self._conn: Any | None = None
         self._session_id: str | None = None
-        self._bridge: TUIBridge | None = None
-        self._command_registry: SlashCommandRegistry = create_default_registry()
         self._process: Any | None = None
-        self._closing: bool = False
-        self._initial_prompt: str | None = initial_prompt
-        self._continue_session: bool = continue_session
-        self._resume_session_id: str | None = resume_session_id
-        self._no_welcome: bool = no_welcome
+        self._bridge: TUIBridge | None = None
+        self._closing = False
+        self._mcp_servers: list[dict[str, Any]] = []
+        self._quit_armed_at: float | None = None
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
+        self._command_registry: SlashCommandRegistry = create_default_registry()
+        self._chat_screen = ChatScreen()
+        self.register_theme(MALIBU_CLOUD_THEME)
+        self.theme = MALIBU_CLOUD_THEME.name
 
     def on_mount(self) -> None:
-        """Show welcome screen (if enabled) then start the ACP connection."""
+        self._chat_screen.set_shell_ready(False)
+        self.install_screen(self._chat_screen, name="chat")
+        if self._should_show_welcome():
+            self.install_screen(WelcomeScreen(), name="welcome")
+            self.push_screen("welcome")
+        else:
+            self.push_screen("chat")
+        self._start_agent()
+
+    def _should_show_welcome(self) -> bool:
         from malibu.config import get_settings
 
         settings = get_settings()
-        if settings.tui_show_welcome and not self._no_welcome:
-            self.push_screen(WelcomeScreen())
-        else:
-            self.push_screen(ChatScreen())
+        return bool(settings.tui_show_welcome and not self._no_welcome)
 
-        self._start_agent()
+    def show_chat_screen(self) -> None:
+        """Switch from the welcome screen to the persistent chat shell."""
+        self.switch_screen("chat")
+
+    def _watch_theme(self, theme_name: str) -> None:
+        super()._watch_theme(theme_name)
+        self.call_next(self._chat_screen.refresh_theme)
 
     @work(exclusive=True, group="agent")
     async def _start_agent(self) -> None:
-        """Spawn the agent subprocess and connect via ACP."""
         await self._connect_agent()
 
     async def _connect_agent(self) -> None:
-        """Establish ACP connection to the agent subprocess."""
         from acp import PROTOCOL_VERSION
 
         from malibu.client.client import MalibuClient
@@ -94,16 +112,16 @@ class MalibuApp(App):
             cwd=self._cwd,
             display_handler=self._bridge.display_handler,
             permission_handler=self._bridge.permission_handler,
+            extension_method_handler=self._bridge.extension_method_handler,
+            extension_notification_handler=self._bridge.extension_notification_handler,
         )
 
-        # Discover MCP servers
         mcp_servers = discover_mcp_servers(self._cwd)
+        self._mcp_servers = mcp_servers
 
         async with connect_local_agent(client, settings=settings) as (conn, process):
             self._conn = conn
             self._process = process
-
-            # Drain agent stderr
             stderr_task = asyncio.create_task(self._drain_stderr(process))
 
             try:
@@ -111,35 +129,87 @@ class MalibuApp(App):
                     conn.initialize(protocol_version=PROTOCOL_VERSION, client_capabilities=None),
                     timeout=15.0,
                 )
-                session = await asyncio.wait_for(
-                    conn.new_session(mcp_servers=mcp_servers, cwd=self._cwd),
-                    timeout=15.0,
-                )
-                self._session_id = session.session_id
+                self._session_id = await self._open_session(conn, mcp_servers)
+                await self._bootstrap_chat()
 
-                # Send initial prompt if provided (e.g. from bare CLI arg)
                 if self._initial_prompt:
                     prompt = self._initial_prompt
-                    self._initial_prompt = None  # Only send once
-                    from acp import text_block
-                    try:
-                        await conn.prompt(
-                            session_id=session.session_id,
-                            prompt=[text_block(prompt)],
-                        )
-                    except Exception:
-                        pass
+                    self._initial_prompt = None
+                    await self.dispatch_prompt(prompt)
 
-                # Block until the app exits
                 while not self._closing:
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.25)
             finally:
                 stderr_task.cancel()
 
         await client.cleanup()
 
+    async def _open_session(self, conn: Any, mcp_servers: list[dict[str, Any]]) -> str:
+        if self._resume_session_id:
+            await asyncio.wait_for(
+                conn.resume_session(
+                    session_id=self._resume_session_id,
+                    cwd=self._cwd,
+                    mcp_servers=mcp_servers,
+                ),
+                timeout=15.0,
+            )
+            return self._resume_session_id
+
+        if self._continue_session:
+            sessions = await asyncio.wait_for(conn.list_sessions(cwd=self._cwd), timeout=15.0)
+            if sessions.sessions:
+                session_id = sessions.sessions[0].session_id
+                await asyncio.wait_for(
+                    conn.resume_session(
+                        session_id=session_id,
+                        cwd=self._cwd,
+                        mcp_servers=mcp_servers,
+                    ),
+                    timeout=15.0,
+                )
+                return session_id
+
+        session = await asyncio.wait_for(
+            conn.new_session(mcp_servers=mcp_servers, cwd=self._cwd),
+            timeout=15.0,
+        )
+        return session.session_id
+
+    async def _bootstrap_chat(self) -> None:
+        if self._conn is None or self._session_id is None:
+            return
+        try:
+            payload = await self._conn.ext_method(
+                TUI_BOOTSTRAP_METHOD,
+                {"session_id": self._session_id, "cwd": self._cwd},
+            )
+        except Exception:
+            payload = {}
+        self._chat_screen.load_bootstrap(payload)
+        self.run_worker(self._chat_screen.message_controller.flush_ready_queue(), exclusive=False)
+
+    async def new_session(self) -> None:
+        if self._conn is None:
+            return
+        session = await self._conn.new_session(cwd=self._cwd, mcp_servers=self._mcp_servers)
+        self._session_id = session.session_id
+        self._chat_screen.action_clear_messages()
+        await self._bootstrap_chat()
+
+    async def resume_session(self, session_id: str) -> None:
+        if self._conn is None:
+            return
+        await self._conn.resume_session(
+            session_id=session_id,
+            cwd=self._cwd,
+            mcp_servers=self._mcp_servers,
+        )
+        self._session_id = session_id
+        self._chat_screen.action_clear_messages()
+        await self._bootstrap_chat()
+
     async def _drain_stderr(self, process: Any) -> None:
-        """Read subprocess stderr silently (logged, not displayed)."""
         if process.stderr is None:
             return
         try:
@@ -151,81 +221,64 @@ class MalibuApp(App):
             pass
 
     # ------------------------------------------------------------------
-    # Message dispatch (forwarded from bridge → active screen)
+    # Bridge dispatch
     # ------------------------------------------------------------------
 
     def on_session_update_message(self, message: SessionUpdateMessage) -> None:
-        """Forward ACP session updates to the active screen."""
-        screen = self.screen
-        if hasattr(screen, "handle_session_update"):
-            screen.handle_session_update(message)
+        self._chat_screen.handle_session_update(message)
 
     def on_permission_request_message(self, message: PermissionRequestMessage) -> None:
-        """Forward permission requests to the active screen."""
-        screen = self.screen
-        if hasattr(screen, "handle_permission_request"):
-            screen.handle_permission_request(message)
+        self._chat_screen.handle_permission_request(message)
+
+    def on_extension_request_message(self, message: ExtensionRequestMessage) -> None:
+        self._chat_screen.handle_extension_request(message)
+
+    def on_extension_notification_message(self, message: ExtensionNotificationMessage) -> None:
+        self._chat_screen.handle_extension_notification(message)
 
     # ------------------------------------------------------------------
-    # Public API — used by ChatScreen and commands
+    # Prompt dispatch
     # ------------------------------------------------------------------
 
     @work(group="prompt")
     async def send_prompt(self, text: str) -> None:
-        """Send a user prompt to the agent — called from ChatScreen."""
-        await self._send_prompt_async(text)
+        await self.dispatch_prompt(text)
 
-    async def _send_prompt_async(self, text: str) -> None:
-        """Dispatch text as slash-command or ACP prompt."""
+    async def dispatch_prompt(self, text: str) -> None:
         if self._conn is None or self._session_id is None:
             return
 
-        # Slash command?
         if self._command_registry.is_command(text):
             cmd_name, args = self._command_registry.parse(text)
             command = self._command_registry.get(cmd_name)
-            if command:
-                ctx = CommandContext(
-                    app=self,
-                    conn=self._conn,
-                    session_id=self._session_id,
-                )
-                try:
-                    await command.execute(ctx, args)
-                except Exception as exc:
-                    from malibu.tui.bridge import SessionUpdateMessage
-                    from acp.schema import AgentMessageChunk, TextContentBlock
-
-                    error_update = AgentMessageChunk(
-                        session_update="agent_message_chunk",
-                        content=TextContentBlock(type="text", text=f"Command error: {exc}"),
-                    )
-                    self.post_message(SessionUpdateMessage(self._session_id, error_update))
+            if command is not None:
+                ctx = CommandContext(app=self, conn=self._conn, session_id=self._session_id)
+                await command.execute(ctx, args)
                 return
-            # Unknown command — fall through to agent
 
         from acp import text_block
+        from acp.schema import AgentMessageChunk, TextContentBlock
 
         try:
-            await self._conn.prompt(
-                session_id=self._session_id,
-                prompt=[text_block(text)],
-            )
+            await self._conn.prompt(session_id=self._session_id, prompt=[text_block(text)])
         except Exception as exc:
-            from acp.schema import AgentMessageChunk, TextContentBlock
-
-            error_update = AgentMessageChunk(
+            update = AgentMessageChunk(
                 session_update="agent_message_chunk",
                 content=TextContentBlock(type="text", text=f"Error: {exc}"),
             )
-            self.post_message(SessionUpdateMessage(self._session_id, error_update))
+            self.post_message(SessionUpdateMessage(self._session_id, update))
 
     # ------------------------------------------------------------------
-    # Actions
+    # Actions and properties
     # ------------------------------------------------------------------
 
     def action_cancel(self) -> None:
-        """Cancel the current agent operation."""
+        now = time.monotonic()
+        if self._quit_armed_at is not None and now - self._quit_armed_at < 1.5:
+            self.action_quit()
+            return
+
+        self._quit_armed_at = now
         if self._conn and self._session_id:
 
             async def _cancel() -> None:
@@ -235,6 +288,24 @@ class MalibuApp(App):
                     pass
 
             asyncio.ensure_future(_cancel())
+        self.notify("Press Ctrl+C again to quit", severity="warning", timeout=1.5)
+
+    def action_quit(self) -> None:
+        self._quit_armed_at = None
+        if self._closing:
+            return
+        self._closing = True
+        with contextlib.suppress(Exception):
+            self.workers.cancel_all()
+        if self._process is not None:
+            with contextlib.suppress(Exception):
+                self._process.terminate()
+            with contextlib.suppress(Exception):
+                self._process.kill()
+        self._process = None
+        self._conn = None
+        self._bridge = None
+        self.exit()
 
     @property
     def conn(self) -> Any:
@@ -243,6 +314,10 @@ class MalibuApp(App):
     @property
     def session_id(self) -> str | None:
         return self._session_id
+
+    @session_id.setter
+    def session_id(self, value: str | None) -> None:
+        self._session_id = value
 
     @property
     def command_registry(self) -> SlashCommandRegistry:
@@ -253,6 +328,5 @@ class MalibuApp(App):
         return self._cwd
 
     def exit(self, result: object = None, *args: object, **kwargs: object) -> None:
-        """Signal the agent loop to stop, then exit normally."""
         self._closing = True
         super().exit(result, *args, **kwargs)  # type: ignore[arg-type]

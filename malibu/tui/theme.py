@@ -7,6 +7,7 @@ and CSS variable names used throughout the interface.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from textual.theme import Theme
 
 
 # ── Color Palette ────────────────────────────────────────────────────────────
@@ -127,3 +128,33 @@ COLORS = Colors()
 GLYPHS = Glyphs()
 GLYPHS_ASCII = Glyphs.ascii()
 CSS_VARS = CSSVars()
+
+
+MALIBU_CLOUD_THEME = Theme(
+    name="malibu-cloud",
+    primary="#B07D62",
+    secondary="#8B6A58",
+    warning="#C99A52",
+    error="#C25B4B",
+    success="#879A63",
+    accent="#D7A77A",
+    background="#14110F",
+    surface="#1C1816",
+    panel="#27211E",
+    foreground="#F3EBDD",
+    variables={
+        "foreground-muted": "#AA9988",
+        "text-muted": "#8A7A6A",
+        "border": "#5A463A",
+        "border-blurred": "#3E312A",
+        "surface-active": "#2A2320",
+        "panel-lighten-1": "#4A3A31",
+        "panel-darken-1": "#1D1815",
+        "input-cursor-foreground": "#14110F",
+        "input-cursor-background": "#F3EBDD",
+        "input-selection-background": "#7C6555 35%",
+        "footer-key-foreground": "#D7A77A",
+        "footer-description-foreground": "#F3EBDD",
+        "button-color-foreground": "#14110F",
+    },
+)

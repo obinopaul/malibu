@@ -25,17 +25,27 @@ class SessionCommand(BaseCommand):
         subcommand = args[0].lower()
 
         if subcommand == "list":
-            sessions = await ctx.conn.list_sessions()
+            sessions = await ctx.conn.list_sessions(cwd=ctx.app.cwd)
             from malibu.tui.screens import SessionBrowserScreen
 
-            ctx.app.push_screen(SessionBrowserScreen(sessions))
+            items = [
+                {
+                    "session_id": session.session_id,
+                    "title": session.title or f"Session {session.session_id[:8]}",
+                    "cwd": session.cwd,
+                    "mode": "",
+                }
+                for session in sessions.sessions
+            ]
+            selection = await ctx.app.push_screen_wait(SessionBrowserScreen(items))
+            if selection == "__new__":
+                await ctx.app.new_session()
+            elif selection:
+                await ctx.app.resume_session(selection)
 
         elif subcommand == "new":
-            result = await ctx.conn.new_session()
-            ctx.app.session_id = result.session_id  # type: ignore[attr-defined]
-            self._post_system(
-                ctx, f"[dim]New session started: {result.session_id}[/]"
-            )
+            await ctx.app.new_session()
+            self._post_system(ctx, f"[dim]New session started: {ctx.app.session_id}[/]")
 
         elif subcommand == "resume":
             if len(args) < 2:
@@ -45,12 +55,11 @@ class SessionCommand(BaseCommand):
                 )
                 return
             session_id = args[1]
-            await ctx.conn.resume_session(session_id=session_id)
-            ctx.app.session_id = session_id  # type: ignore[attr-defined]
+            await ctx.app.resume_session(session_id)
             self._post_system(ctx, f"[dim]Resumed session {session_id}[/]")
 
         elif subcommand == "fork":
-            result = await ctx.conn.fork_session(session_id=ctx.session_id)
+            result = await ctx.conn.fork_session(session_id=ctx.session_id, cwd=ctx.app.cwd)
             ctx.app.session_id = result.session_id  # type: ignore[attr-defined]
             self._post_system(
                 ctx, f"[dim]Forked to new session {result.session_id}[/]"

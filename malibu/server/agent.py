@@ -1,25 +1,7 @@
-"""MalibuAgent — full ACP Agent implementation with all 15 protocol methods.
-
-This is the core of the Malibu harness.  It implements every method defined
-in ``acp.interfaces.Agent`` and orchestrates:
-
-  - LangGraph agent streaming with tool call accumulation
-  - Human-in-the-loop permission prompts via ACP request_permission
-  - Plan lifecycle (create / update / clear)
-  - Session management (new / load / list / fork / resume)
-  - Mode switching with interrupt reconfiguration
-  - Model switching
-  - Config option management
-  - Authentication
-  - Cancellation
-  - Extension methods / notifications
-
-Every method is wired to database persistence and structured logging.
-"""
+"""ACP agent implementation backing Malibu's Textual shell."""
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -61,14 +43,15 @@ from acp.schema import (
     SetSessionModeResponse,
     SseMcpServer,
     TextContentBlock,
+    ToolCallProgress,
     ToolCallUpdate,
     UsageUpdate,
+    UserMessageChunk,
 )
 from langgraph.types import Command
 
 from malibu.agent.compaction import CompactionManager
 from malibu.agent.modes import DEFAULT_MODES
- 
 from malibu.config import Settings
 from malibu.server.auth import ServerAuthHandler
 from malibu.server.config_options import ConfigOptionManager
@@ -79,6 +62,7 @@ from malibu.server.plans import build_empty_plan, build_plan_update, format_plan
 from malibu.server.sessions import SessionManager
 from malibu.server.streaming import ToolCallAccumulator, create_tool_call_start, format_execute_result
 from malibu.telemetry.logging import get_logger
+from malibu.tui.protocol import TUI_BOOTSTRAP_METHOD, TUI_EVENT_NOTIFICATION, TUI_INTERRUPT_METHOD, build_tui_event
 
 if TYPE_CHECKING:
     from acp.interfaces import Client
@@ -87,10 +71,7 @@ log = get_logger(__name__)
 
 
 class MalibuAgent(ACPAgent):
-    """Production-grade ACP Agent backed by LangGraph + PostgreSQL.
-
-    Implements all 15 ACP protocol methods.
-    """
+    """Malibu ACP agent with custom TUI interrupt and bootstrap support."""
 
     _conn: Client
 
@@ -105,23 +86,14 @@ class MalibuAgent(ACPAgent):
         self._cancelled: dict[str, bool] = {}
         self._compaction_mgr = CompactionManager()
 
-        # Register built-in extension methods
         self._extensions.register_method("compact", self._ext_compact)
         self._extensions.register_method("plan", self._ext_plan)
         self._extensions.register_method("skills", self._ext_skills)
-
-    # ───────────────────────────────────────────────────────────
-    # Connection lifecycle
-    # ───────────────────────────────────────────────────────────
+        self._extensions.register_method(TUI_BOOTSTRAP_METHOD, self._ext_tui_bootstrap)
 
     def on_connect(self, conn: Client) -> None:
-        """Store the client connection for session_update and request_permission calls."""
         self._conn = conn
         log.info("client_connected")
-
-    # ───────────────────────────────────────────────────────────
-    # 1. initialize
-    # ───────────────────────────────────────────────────────────
 
     async def initialize(
         self,
@@ -130,21 +102,10 @@ class MalibuAgent(ACPAgent):
         client_info: Implementation | None = None,
         **kwargs: Any,
     ) -> InitializeResponse:
-        log.info(
-            "initialize",
-            protocol_version=protocol_version,
-            client_info=client_info.model_dump() if client_info else None,
-        )
         return InitializeResponse(
             protocol_version=protocol_version,
-            agent_capabilities=AgentCapabilities(
-                prompt_capabilities=PromptCapabilities(image=True),
-            ),
+            agent_capabilities=AgentCapabilities(prompt_capabilities=PromptCapabilities(image=True)),
         )
-
-    # ───────────────────────────────────────────────────────────
-    # 2. new_session
-    # ───────────────────────────────────────────────────────────
 
     async def new_session(
         self,
@@ -154,12 +115,7 @@ class MalibuAgent(ACPAgent):
     ) -> NewSessionResponse:
         session_id = uuid4().hex
         self._session_mgr.create_session(session_id, cwd=cwd, mode_id=DEFAULT_MODES.current_mode_id)
-        log.info("new_session", session_id=session_id, cwd=cwd)
         return NewSessionResponse(session_id=session_id, modes=DEFAULT_MODES)
-
-    # ───────────────────────────────────────────────────────────
-    # 3. load_session
-    # ───────────────────────────────────────────────────────────
 
     async def load_session(
         self,
@@ -168,16 +124,9 @@ class MalibuAgent(ACPAgent):
         mcp_servers: list[HttpMcpServer | SseMcpServer | McpServerStdio] | None = None,
         **kwargs: Any,
     ) -> LoadSessionResponse | None:
-        agent = self._session_mgr.get_agent(session_id)
-        if agent is None:
-            # Recreate agent for existing session
+        if self._session_mgr.get_agent(session_id) is None:
             self._session_mgr.create_session(session_id, cwd=cwd)
-        log.info("load_session", session_id=session_id, cwd=cwd)
         return LoadSessionResponse(modes=DEFAULT_MODES)
-
-    # ───────────────────────────────────────────────────────────
-    # 4. list_sessions (unstable)
-    # ───────────────────────────────────────────────────────────
 
     async def list_sessions(
         self,
@@ -185,25 +134,32 @@ class MalibuAgent(ACPAgent):
         cwd: str | None = None,
         **kwargs: Any,
     ) -> ListSessionsResponse:
-        # Return in-memory sessions for now; production would query DB
-        items: list[SessionInfo] = []
-        for sid in list(self._session_mgr._agents.keys()):
-            session_cwd = self._session_mgr.get_cwd(sid)
-            if cwd and session_cwd != cwd:
-                continue
-            items.append(
-                SessionInfo(
-                    session_id=sid,
-                    cwd=session_cwd,
-                    title=f"Session {sid[:8]}",
+        sessions: list[SessionInfo] = []
+        records = []
+        if hasattr(self._session_mgr, "list_session_records"):
+            records = self._session_mgr.list_session_records(cwd=cwd)
+        if isinstance(records, list) and records:
+            for record in records:
+                sessions.append(
+                    SessionInfo(
+                        session_id=str(record.get("session_id", "")),
+                        cwd=str(record.get("cwd", cwd or ".")),
+                        title=str(record.get("title", "Session")),
+                    )
                 )
-            )
-        log.info("list_sessions", count=len(items))
-        return ListSessionsResponse(sessions=items)
-
-    # ───────────────────────────────────────────────────────────
-    # 5. set_session_mode
-    # ───────────────────────────────────────────────────────────
+        else:
+            for session_id in getattr(self._session_mgr, "_agents", {}):
+                session_cwd = self._session_mgr.get_cwd(session_id)
+                if cwd and session_cwd != cwd:
+                    continue
+                sessions.append(
+                    SessionInfo(
+                        session_id=session_id,
+                        cwd=session_cwd,
+                        title=f"Session {session_id[:8]}",
+                    )
+                )
+        return ListSessionsResponse(sessions=sessions)
 
     async def set_session_mode(
         self,
@@ -212,18 +168,11 @@ class MalibuAgent(ACPAgent):
         **kwargs: Any,
     ) -> SetSessionModeResponse | None:
         self._session_mgr.set_mode(session_id, mode_id)
-        # Notify client of mode change
-        await self._conn.session_update(
-            session_id=session_id,
-            update=CurrentModeUpdate(session_update="current_mode_update", current_mode_id=mode_id),
-            source="Malibu",
+        await self._emit_session_update(
+            session_id,
+            CurrentModeUpdate(session_update="current_mode_update", current_mode_id=mode_id),
         )
-        log.info("set_session_mode", session_id=session_id, mode_id=mode_id)
         return SetSessionModeResponse()
-
-    # ───────────────────────────────────────────────────────────
-    # 6. set_session_model (unstable)
-    # ───────────────────────────────────────────────────────────
 
     async def set_session_model(
         self,
@@ -232,12 +181,12 @@ class MalibuAgent(ACPAgent):
         **kwargs: Any,
     ) -> SetSessionModelResponse | None:
         self._session_mgr.set_model(session_id, model_id)
-        log.info("set_session_model", session_id=session_id, model_id=model_id)
+        await self._emit_tui_event(
+            session_id,
+            "session_metadata",
+            {"model": model_id},
+        )
         return SetSessionModelResponse()
-
-    # ───────────────────────────────────────────────────────────
-    # 7. set_config_option
-    # ───────────────────────────────────────────────────────────
 
     async def set_config_option(
         self,
@@ -247,31 +196,19 @@ class MalibuAgent(ACPAgent):
         **kwargs: Any,
     ) -> SetSessionConfigOptionResponse | None:
         update = self._config_options.set_option(session_id, config_id, value)
-        if update:
+        if update is not None:
+            self._session_mgr.update_config(session_id, config_id, update.value)
             config_options = self._config_options.build_session_config_options(session_id)
-            await self._conn.session_update(
-                session_id=session_id,
-                update=ConfigOptionUpdate(
-                    session_update="config_option_update",
-                    config_options=config_options,
-                ),
-                source="Malibu",
+            await self._emit_session_update(
+                session_id,
+                ConfigOptionUpdate(session_update="config_option_update", config_options=config_options),
             )
+            return SetSessionConfigOptionResponse(config_options=config_options)
         config_options = self._config_options.build_session_config_options(session_id)
-        log.info("set_config_option", session_id=session_id, config_id=config_id, value=value)
         return SetSessionConfigOptionResponse(config_options=config_options)
 
-    # ───────────────────────────────────────────────────────────
-    # 8. authenticate
-    # ───────────────────────────────────────────────────────────
-
     async def authenticate(self, method_id: str, **kwargs: Any) -> AuthenticateResponse | None:
-        log.info("authenticate", method_id=method_id)
         return await self._auth_handler.authenticate(method_id, **kwargs)
-
-    # ───────────────────────────────────────────────────────────
-    # 9. prompt (core streaming loop)
-    # ───────────────────────────────────────────────────────────
 
     async def prompt(
         self,
@@ -283,10 +220,19 @@ class MalibuAgent(ACPAgent):
     ) -> PromptResponse:
         cwd = self._session_mgr.get_cwd(session_id)
         agent = self._session_mgr.get_or_create_agent(session_id, cwd=cwd)
-
         self._cancelled[session_id] = False
 
-        # Convert ACP content blocks → LangChain multimodal content
+        user_text = self._extract_prompt_text(prompt)
+        if user_text:
+            await self._emit_session_update(
+                session_id,
+                UserMessageChunk(
+                    session_update="user_message_chunk",
+                    content=TextContentBlock(type="text", text=user_text),
+                ),
+            )
+            self._maybe_set_session_title(session_id, user_text)
+
         content_blocks: list[dict[str, Any]] = []
         for block in prompt:
             content_blocks.extend(convert_any_block(block, root_dir=cwd))
@@ -295,11 +241,10 @@ class MalibuAgent(ACPAgent):
         callbacks = self._session_mgr.get_callbacks(session_id)
         if callbacks:
             config["callbacks"] = callbacks
-        accumulator = ToolCallAccumulator()
-        user_decisions: list[dict[str, Any]] = []
-        current_state = None
 
-        log.info("prompt_start", session_id=session_id)
+        accumulator = ToolCallAccumulator()
+        current_state = None
+        resume_payload: Any | None = None
 
         try:
             return await self._prompt_loop(
@@ -308,7 +253,7 @@ class MalibuAgent(ACPAgent):
                 content_blocks=content_blocks,
                 config=config,
                 accumulator=accumulator,
-                user_decisions=user_decisions,
+                resume_payload=resume_payload,
                 current_state=current_state,
             )
         except RequestError:
@@ -325,7 +270,7 @@ class MalibuAgent(ACPAgent):
         content_blocks: list[dict[str, Any]],
         config: dict[str, Any],
         accumulator: ToolCallAccumulator,
-        user_decisions: list[dict[str, Any]],
+        resume_payload: Any | None,
         current_state: Any,
     ) -> PromptResponse:
         while current_state is None or current_state.interrupts:
@@ -333,10 +278,11 @@ class MalibuAgent(ACPAgent):
                 return PromptResponse(stop_reason="cancelled")
 
             input_data = (
-                Command(resume={"decisions": user_decisions})
-                if user_decisions
+                Command(resume=resume_payload)
+                if resume_payload is not None
                 else {"messages": [{"role": "user", "content": content_blocks}]}
             )
+            resume_payload = None
 
             async for stream_chunk in agent.astream(
                 input_data,
@@ -348,82 +294,52 @@ class MalibuAgent(ACPAgent):
                     continue
 
                 namespace, stream_mode, data = stream_chunk
-
                 if self._cancelled.pop(session_id, False):
                     return PromptResponse(stop_reason="cancelled")
 
                 if stream_mode == "updates":
                     updates = data
                     if isinstance(updates, dict) and "__interrupt__" in updates:
-                        interrupt_objs = updates.get("__interrupt__")
-                        if interrupt_objs:
-                            for interrupt_obj in interrupt_objs:
-                                interrupt_value = interrupt_obj.value
-                                if not isinstance(interrupt_value, dict):
-                                    raise RequestError(
-                                        -32600,
-                                        "ACP limitation: free-form LangGraph interrupt() not "
-                                        "supported. Use action_requests/review_configs for HITL.",
-                                        {"interrupt_value": interrupt_value},
-                                    )
+                        current_state = await agent.aget_state(config)
+                        resume_payload = await self._handle_interrupts(current_state=current_state, session_id=session_id)
+                        break
 
-                            current_state = await agent.aget_state(config)
-                            user_decisions = await self._handle_interrupts(
-                                current_state=current_state, session_id=session_id
-                            )
-                            break
-
-                    # Check for todo updates from tools node
                     for node_name, update in (updates.items() if isinstance(updates, dict) else []):
                         if node_name == "tools" and isinstance(update, dict) and "todos" in update:
                             todos = update.get("todos", [])
                             if todos:
-                                plan_update = build_plan_update(todos)
-                                await self._conn.session_update(
-                                    session_id=session_id, update=plan_update, source="Malibu"
-                                )
+                                await self._emit_session_update(session_id, build_plan_update(todos))
                     continue
 
-                # Message stream
                 message_chunk, _metadata = data
-
-                # Process tool call chunks
                 new_starts = accumulator.process_chunk(message_chunk)
-                for tc_start in new_starts:
-                    await self._conn.session_update(session_id=session_id, update=tc_start, source="Malibu")
-
-                    # If write_todos, forward plan immediately
-                    tc_info = accumulator.active.get(tc_start.tool_call_id, {})
-                    if tc_info.get("name") == "write_todos":
-                        todos = tc_info.get("args", {}).get("todos", [])
+                for tool_start in new_starts:
+                    await self._emit_session_update(session_id, tool_start)
+                    info = accumulator.active.get(tool_start.tool_call_id, {})
+                    if info.get("name") == "write_todos":
+                        todos = info.get("args", {}).get("todos", [])
                         if todos:
-                            plan_update = build_plan_update(todos)
-                            await self._conn.session_update(
-                                session_id=session_id, update=plan_update, source="Malibu"
-                            )
+                            await self._emit_session_update(session_id, build_plan_update(todos))
 
-                # Tool result messages
                 if hasattr(message_chunk, "type") and message_chunk.type == "tool":
                     tool_call_id = getattr(message_chunk, "tool_call_id", None)
                     if tool_call_id and tool_call_id in accumulator.active:
-                        tc_info = accumulator.active[tool_call_id]
-                        if tc_info.get("name") != "edit_file":
+                        info = accumulator.active[tool_call_id]
+                        if info.get("name") != "edit_file":
                             content = getattr(message_chunk, "content", "")
-                            if tc_info.get("name") == "execute":
-                                cmd = tc_info.get("args", {}).get("command", "")
-                                formatted = format_execute_result(cmd, str(content))
+                            if info.get("name") == "execute":
+                                command = info.get("args", {}).get("command", "")
+                                formatted = format_execute_result(command, str(content))
                             else:
                                 formatted = str(content)
-                            tc_update = update_tool_call(
-                                tool_call_id=tool_call_id,
-                                status="completed",
-                                content=[tool_content(text_block(formatted))],
+                            await self._emit_session_update(
+                                session_id,
+                                update_tool_call(
+                                    tool_call_id=tool_call_id,
+                                    status="completed",
+                                    content=[tool_content(text_block(formatted))],
+                                ),
                             )
-                            await self._conn.session_update(
-                                session_id=session_id, update=tc_update, source="Malibu"
-                            )
-
-                # Text content streaming
                 elif isinstance(message_chunk, str):
                     if not namespace:
                         await self._send_text(session_id, message_chunk)
@@ -435,12 +351,7 @@ class MalibuAgent(ACPAgent):
             current_state = await agent.aget_state(config)
 
         self._cancelled.pop(session_id, None)
-        log.info("prompt_complete", session_id=session_id)
         return PromptResponse(stop_reason="end_turn")
-
-    # ───────────────────────────────────────────────────────────
-    # 10. fork_session (unstable)
-    # ───────────────────────────────────────────────────────────
 
     async def fork_session(
         self,
@@ -451,12 +362,7 @@ class MalibuAgent(ACPAgent):
     ) -> ForkSessionResponse:
         new_session_id = uuid4().hex
         self._session_mgr.fork_session(session_id, new_session_id, cwd=cwd)
-        log.info("fork_session", source=session_id, new=new_session_id)
         return ForkSessionResponse(session_id=new_session_id, modes=DEFAULT_MODES)
-
-    # ───────────────────────────────────────────────────────────
-    # 11. resume_session (unstable)
-    # ───────────────────────────────────────────────────────────
 
     async def resume_session(
         self,
@@ -465,46 +371,128 @@ class MalibuAgent(ACPAgent):
         mcp_servers: list[HttpMcpServer | SseMcpServer | McpServerStdio] | None = None,
         **kwargs: Any,
     ) -> ResumeSessionResponse:
-        agent = self._session_mgr.get_agent(session_id)
-        if agent is None:
+        if self._session_mgr.get_agent(session_id) is None:
             self._session_mgr.create_session(session_id, cwd=cwd)
-        log.info("resume_session", session_id=session_id, cwd=cwd)
         return ResumeSessionResponse(modes=DEFAULT_MODES)
-
-    # ───────────────────────────────────────────────────────────
-    # 12. cancel
-    # ───────────────────────────────────────────────────────────
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
         self._cancelled[session_id] = True
-        log.info("cancel", session_id=session_id)
-
-    # ───────────────────────────────────────────────────────────
-    # 13. ext_method
-    # ───────────────────────────────────────────────────────────
 
     async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         return await self._extensions.handle_method(method, params)
 
-    # ───────────────────────────────────────────────────────────
-    # 14. ext_notification
-    # ───────────────────────────────────────────────────────────
-
     async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
         await self._extensions.handle_notification(method, params)
 
-    # ═══════════════════════════════════════════════════════════
-    # Private helpers
-    # ═══════════════════════════════════════════════════════════
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    async def _emit_session_update(self, session_id: str, update: Any) -> None:
+        self._session_mgr.record_session_update(session_id, update)
+        await self._conn.session_update(session_id=session_id, update=update, source="Malibu")
+
+    async def _emit_tui_event(self, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        params = build_tui_event(session_id, event_type, payload)
+        self._session_mgr.record_tui_event(session_id, params)
+        try:
+            await self._conn.ext_notification(TUI_EVENT_NOTIFICATION, params)
+        except Exception:
+            pass
 
     async def _send_text(self, session_id: str, text: str) -> None:
-        """Send an agent message chunk to the client."""
-        update = update_agent_message(text_block(text))
-        await self._conn.session_update(session_id=session_id, update=update, source="Malibu")
+        await self._emit_session_update(session_id, update_agent_message(text_block(text)))
+
+    async def _handle_interrupts(self, *, current_state: Any, session_id: str) -> Any:
+        if not (current_state.next and current_state.interrupts):
+            return None
+
+        for interrupt in current_state.interrupts:
+            value = interrupt.value
+            if isinstance(value, dict) and value.get("type") == "ask_user":
+                response = await self._conn.ext_method(
+                    TUI_INTERRUPT_METHOD,
+                    {
+                        "session_id": session_id,
+                        "interrupt_id": interrupt.id,
+                        "prompt": {
+                            "type": "ask_user",
+                            "questions": value.get("questions", []),
+                            "tool_call_id": value.get("tool_call_id"),
+                        },
+                    },
+                )
+                return response
+
+            if not isinstance(value, dict):
+                raise RequestError(-32600, "Unsupported interrupt payload", {"interrupt_value": value})
+
+            action_requests = value.get("action_requests", [])
+            review_configs = value.get("review_configs", [])
+            decisions: list[dict[str, Any]] = []
+
+            for index, action in enumerate(action_requests):
+                tool_name = action.get("name", "tool")
+                tool_args = action.get("args", {})
+                review_config = review_configs[index] if index < len(review_configs) else {}
+                allowed_decisions = list(review_config.get("allowed_decisions", ["approve", "reject"]))
+
+                if self._permissions.is_auto_approved(session_id, tool_name, tool_args):
+                    decisions.append({"type": "approve"})
+                    continue
+
+                if tool_name == "write_todos":
+                    todos = tool_args.get("todos", [])
+                    await self._send_text(session_id, format_plan_text(todos))
+                    prompt = {
+                        "type": "plan_review",
+                        "title": "Review plan",
+                        "tool_name": tool_name,
+                        "todos": todos,
+                        "allowed_decisions": ["approve", "reject"],
+                        "can_always_allow": True,
+                    }
+                else:
+                    prompt = {
+                        "type": "tool_approval",
+                        "title": self._permissions.build_title(tool_name, tool_args),
+                        "subtitle": tool_name,
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "allowed_decisions": allowed_decisions,
+                        "can_always_allow": True,
+                        "cwd": self._session_mgr.get_cwd(session_id),
+                    }
+
+                response = await self._conn.ext_method(
+                    TUI_INTERRUPT_METHOD,
+                    {
+                        "session_id": session_id,
+                        "interrupt_id": interrupt.id,
+                        "prompt": prompt,
+                    },
+                )
+
+                decision = response.get("decision", {"type": "approve"})
+                remember = response.get("remember", {})
+                if remember.get("type") == "always_allow":
+                    self._permissions.register_always_allow(session_id, tool_name, tool_args)
+
+                if tool_name == "write_todos":
+                    if decision.get("type") == "approve":
+                        self._permissions.approve_plan(session_id, tool_args)
+                    elif decision.get("type") == "reject":
+                        self._permissions.clear_plan(session_id)
+                        await self._emit_session_update(session_id, build_empty_plan())
+
+                decisions.append(decision)
+
+            return {"decisions": decisions}
+
+        return None
 
     @staticmethod
     def _extract_text(content: Any) -> str:
-        """Extract text from LangChain message content (str or list of blocks)."""
         if isinstance(content, str):
             return content
         if isinstance(content, list):
@@ -517,141 +505,74 @@ class MalibuAgent(ACPAgent):
             return "".join(parts)
         return str(content)
 
-    async def _handle_interrupts(
-        self,
-        *,
-        current_state: Any,
-        session_id: str,
-    ) -> list[dict[str, Any]]:
-        """Convert LangGraph interrupts to ACP permission requests."""
-        user_decisions: list[dict[str, Any]] = []
+    @staticmethod
+    def _extract_prompt_text(
+        prompt: list[
+            TextContentBlock | ImageContentBlock | AudioContentBlock | ResourceContentBlock | EmbeddedResourceContentBlock
+        ],
+    ) -> str:
+        parts: list[str] = []
+        for block in prompt:
+            if isinstance(block, TextContentBlock):
+                parts.append(block.text)
+        return "\n".join(part for part in parts if part).strip()
 
-        if not (current_state.next and current_state.interrupts):
-            return user_decisions
+    def _maybe_set_session_title(self, session_id: str, user_text: str) -> None:
+        existing = self._session_mgr.get_bootstrap_payload(session_id).get("session_title", "")
+        if existing and not str(existing).startswith("Session "):
+            return
+        title = user_text.splitlines()[0].strip()[:72]
+        if not title:
+            return
+        self._session_mgr.set_title(session_id, title)
 
-        for interrupt in current_state.interrupts:
-            tool_call_id = interrupt.id
-            interrupt_value = interrupt.value
+    # ------------------------------------------------------------------
+    # Extension methods
+    # ------------------------------------------------------------------
 
-            action_requests = []
-            if isinstance(interrupt_value, dict):
-                action_requests = interrupt_value.get("action_requests", [])
-
-            for action in action_requests:
-                tool_name = action.get("name", "tool")
-                tool_args = action.get("args", {})
-
-                # Check auto-approval
-                if self._permissions.is_auto_approved(session_id, tool_name, tool_args):
-                    user_decisions.append({"type": "approve"})
-                    continue
-
-                # Send plan text for write_todos
-                if tool_name == "write_todos":
-                    todos = tool_args.get("todos", [])
-                    await self._send_text(session_id, format_plan_text(todos))
-
-                # Build permission request
-                options = self._permissions.build_permission_options(tool_name, tool_args)
-                tool_call_update = self._permissions.build_tool_call_update(tool_call_id, tool_name, tool_args)
-
-                response = await self._conn.request_permission(
-                    session_id=session_id,
-                    tool_call=tool_call_update,
-                    options=options,
-                )
-
-                if response.outcome.outcome == "selected":
-                    decision = response.outcome.option_id
-
-                    if decision == "approve_always":
-                        self._permissions.register_always_allow(session_id, tool_name, tool_args)
-                        user_decisions.append({"type": "approve"})
-
-                    elif tool_name == "write_todos" and decision == "reject":
-                        self._permissions.clear_plan(session_id)
-                        plan_clear = build_empty_plan()
-                        await self._conn.session_update(
-                            session_id=session_id, update=plan_clear, source="Malibu"
-                        )
-                        user_decisions.append({
-                            "type": "reject",
-                            "feedback": (
-                                "The user rejected the plan. Ask for feedback on how "
-                                "to improve it, then create a new plan using write_todos."
-                            ),
-                        })
-
-                    elif tool_name == "write_todos" and decision == "approve":
-                        self._permissions.approve_plan(session_id, tool_args)
-                        user_decisions.append({"type": decision})
-
-                    else:
-                        user_decisions.append({"type": decision})
-                else:
-                    # Cancelled
-                    user_decisions.append({"type": "reject"})
-                    if tool_name == "write_todos":
-                        self._permissions.clear_plan(session_id)
-                        plan_clear = build_empty_plan()
-                        await self._conn.session_update(
-                            session_id=session_id, update=plan_clear, source="Malibu"
-                        )
-
-        return user_decisions
-
-    # ═══════════════════════════════════════════════════════════
-    # Extension method handlers
-    # ═══════════════════════════════════════════════════════════
+    async def _ext_tui_bootstrap(self, params: dict[str, Any]) -> dict[str, Any]:
+        session_id = params.get("session_id", "")
+        cwd = params.get("cwd", ".")
+        if not session_id:
+            raise RequestError(-32602, "session_id is required")
+        if self._session_mgr.get_agent(session_id) is None:
+            self._session_mgr.create_session(session_id, cwd=cwd)
+        payload = self._session_mgr.get_bootstrap_payload(session_id)
+        payload["sessions"] = self._session_mgr.list_session_records(cwd=cwd)
+        payload["models"] = [self._session_mgr.get_model(session_id)]
+        payload["available_commands"] = []
+        return payload
 
     async def _ext_compact(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Handle the 'compact' extension method — compact a session's context."""
         session_id = params.get("session_id", "")
         if not session_id:
             raise RequestError(-32602, "session_id is required")
-
         agent = self._session_mgr.get_agent(session_id)
         if agent is None:
             raise RequestError(-32602, f"No agent for session {session_id}")
-
-        await self._compaction_mgr.compact_state(
-            agent, session_id, self._settings
-        )
-
-        # Notify client
+        await self._compaction_mgr.compact_state(agent, session_id, self._settings)
         await self._send_text(session_id, "[Context compacted — older messages summarised.]")
-        log.info("compaction_complete", session_id=session_id)
         return {"status": "compacted"}
 
     async def _ext_plan(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Handle the 'plan' extension method — invoke the planner subagent."""
         session_id = params.get("session_id", "")
         task = params.get("task", "")
-
         if not session_id:
             raise RequestError(-32602, "session_id is required")
         if not task:
             raise RequestError(-32602, "task is required")
-
-        cwd = self._session_mgr._cwds.get(session_id, ".")
-
-        try:
-            raise RequestError(-32601, "Planning subagent is now natively integrated via deep agents. Please ask the agent directly to generate a plan via a normal message.")
-        except Exception as exc:
-            log.exception("plan_failed", session_id=session_id)
-            raise RequestError(-32603, f"Planning failed: {exc}")
+        raise RequestError(
+            -32601,
+            "Planning subagent is now natively integrated via deep agents. Ask the agent directly.",
+        )
 
     async def _ext_skills(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Handle the 'skills' extension method — list or get info about skills."""
         session_id = params.get("session_id", "")
         action = params.get("action", "list")
         skill_name = params.get("skill_name")
-
         if not session_id:
             raise RequestError(-32602, "session_id is required")
-
         registry = self._session_mgr.skill_registry
-
         if action == "info" and skill_name:
             skill = registry.get_skill(skill_name)
             if skill:
@@ -664,6 +585,4 @@ class MalibuAgent(ACPAgent):
                     }
                 }
             return {"skill": None}
-
-        # Default: list all skills
         return {"skills": registry.list_skills()}

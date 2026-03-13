@@ -2,28 +2,36 @@
 
 from __future__ import annotations
 
+from malibu.agent.modes import DEFAULT_MODES
 from malibu.tui.commands.base import BaseCommand, CommandContext
 
 MODE_MAP: dict[str, str] = {
     "plan": "plan",
+    "ask": "ask_before_edits",
     "normal": "accept_edits",
     "auto": "accept_everything",
+    "ask_before_edits": "ask_before_edits",
+    "accept_edits": "accept_edits",
+    "accept_everything": "accept_everything",
 }
 
 
 class ModeCommand(BaseCommand):
     name = "mode"
-    description = "Switch the agent mode (plan, normal, auto)."
-    usage = "/mode [plan|normal|auto]"
+    description = "Switch the agent mode."
+    usage = "/mode [plan|ask_before_edits|accept_edits|accept_everything]"
 
     async def execute(self, ctx: CommandContext, args: list[str]) -> None:
         if not args:
+            mode_lines = "\n".join(
+                f"  - **{mode.id:18}** {mode.description}"
+                for mode in DEFAULT_MODES.available_modes
+            )
             self._post_system(
                 ctx,
-                "[bold]Available modes:[/]\n"
-                "  plan   - All tools require approval\n"
-                "  normal - Auto-accept edits\n"
-                "  auto   - Accept everything",
+                "**Available modes:**\n\n"
+                f"{mode_lines}\n\n"
+                "*Aliases: normal -> accept_edits, auto -> accept_everything, ask -> ask_before_edits*",
             )
             return
 
@@ -33,13 +41,10 @@ class ModeCommand(BaseCommand):
         if mode_id is None:
             self._post_system(
                 ctx,
-                f"[bold red]Unknown mode:[/] {mode_name}. "
-                f"Choose from: {', '.join(MODE_MAP)}",
+                f"**Unknown mode:** `{mode_name}`. "
+                f"Choose from: {', '.join(mode.id for mode in DEFAULT_MODES.available_modes)}",
             )
             return
-
-        await ctx.conn.set_session_mode(
-            session_id=ctx.session_id, mode_id=mode_id
         )
         self._post_system(ctx, f"Mode set to [bold]{mode_name}[/] ({mode_id})")
 

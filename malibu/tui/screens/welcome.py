@@ -27,7 +27,7 @@ _HINTS = """\
   Just start typing to chat with the agent.
   [dim]/help[/dim]  — list available commands
   [dim]/mode[/dim]  — switch agent mode
-  [dim]ctrl+p[/dim] — toggle plan panel
+  [dim]ctrl+shift+p[/dim] — toggle plan panel
   [dim]ctrl+l[/dim] — clear conversation
 
 Press [bold]any key[/bold] to continue...
@@ -46,21 +46,21 @@ class WelcomeScreen(Screen):
     DEFAULT_CSS = """
     WelcomeScreen {
         align: center middle;
-        background: #0A0E14;
+        background: $background;
     }
     #welcome-container {
         width: 60;
         height: auto;
         padding: 2 4;
-        border: round #0077B6;
-        background: #1A1F2B;
+        border: round $accent;
+        background: $panel;
     }
     #banner {
-        color: #00B4D8;
+        color: $accent;
         text-align: center;
     }
     #version {
-        color: #5C6370;
+        color: $foreground-muted;
         text-align: center;
         margin-bottom: 1;
     }
@@ -85,7 +85,6 @@ class WelcomeScreen(Screen):
 
     def _transition(self) -> None:
         """Switch to the ChatScreen."""
-        from malibu.tui.screens.chat import ChatScreen
-
         if self.is_current:
-            self.app.switch_screen(ChatScreen())
+            if hasattr(self.app, "show_chat_screen"):
+                self.app.show_chat_screen()  # type: ignore[attr-defined]

@@ -65,7 +65,8 @@ async def connect_local_agent(
     try:
         yield conn, handle
     finally:
-        await conn.close()
+        with contextlib.suppress(Exception, asyncio.TimeoutError):
+            await asyncio.wait_for(conn.close(), timeout=0.5)
         agent_writer.close()
         client_writer.close()
         with contextlib.suppress(Exception):
@@ -73,5 +74,5 @@ async def connect_local_agent(
         with contextlib.suppress(Exception):
             await client_writer.wait_closed()
         listen_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await listen_task
+        with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+            await asyncio.wait_for(listen_task, timeout=0.5)

@@ -1,24 +1,16 @@
-"""Built-in /skills command — list and manage available skills.
-
-Skills are directory-based packages with SKILL.md files that provide
-specialized knowledge and workflows to the agent.
-"""
+"""Built-in /skills command."""
 
 from __future__ import annotations
-
-from textual.widgets import Static
 
 from malibu.tui.commands.base import BaseCommand, CommandContext
 
 
 class SkillsCommand(BaseCommand):
     name = "skills"
-    description = "List available skills or get info about a specific skill."
+    description = "List available skills or inspect one skill."
     usage = "/skills [name]"
 
     async def execute(self, ctx: CommandContext, args: list[str]) -> None:
-        message_list = ctx.app.query_one("MessageList")
-
         try:
             result = await ctx.conn.ext_method(
                 "skills",
@@ -28,59 +20,57 @@ class SkillsCommand(BaseCommand):
                     "skill_name": args[0] if args else None,
                 },
             )
-
-            if args:
-                # Info about a specific skill
-                skill = result.get("skill")
-                if skill:
-                    instructions = skill.get("instructions", "")
-                    preview = instructions[:500] + "..." if len(instructions) > 500 else instructions
-                    await message_list.add_message(  # type: ignore[attr-type]
-                        Static(
-                            f"[bold cyan]{skill['name']}[/]\n"
-                            f"[dim]Source:[/] {skill.get('source', 'unknown')}\n"
-                            f"[dim]Description:[/] {skill.get('description', 'N/A')}\n\n"
-                            f"[dim]Instructions preview:[/]\n{preview}",
-                            classes="system-message",
-                        )
-                    )
-                else:
-                    await message_list.add_message(  # type: ignore[attr-type]
-                        Static(
-                            f"[yellow]Skill not found:[/] {args[0]}",
-                            classes="system-message",
-                        )
-                    )
-            else:
-                # List all skills
-                skills = result.get("skills", [])
-                if skills:
-                    lines = ["[bold]Available Skills:[/]\n"]
-                    for s in skills:
-                        status = "[green]✓[/]" if s.get("enabled", True) else "[red]✗[/]"
-                        source = f"[dim]({s.get('source', 'unknown')})[/]"
-                        lines.append(f"  {status} [cyan]{s['name']}[/] {source}")
-                        lines.append(f"      [dim]{s.get('description', '')[:60]}...[/]" if len(s.get('description', '')) > 60 else f"      [dim]{s.get('description', '')}[/]")
-                    await message_list.add_message(  # type: ignore[attr-type]
-                        Static("\n".join(lines), classes="system-message")
-                    )
-                else:
-                    await message_list.add_message(  # type: ignore[attr-type]
-                        Static(
-                            "[dim]No skills found.[/]\n"
-                            "[dim]Skills are loaded from:[/]\n"
-                            "  • malibu/skills/builtin/ (built-in)\n"
-                            "  • ~/.malibu/skills/ (user)\n"
-                            "  • ~/.agents/skills/ (user, shared)\n"
-                            "  • .malibu/skills/ (project)\n"
-                            "  • .agents/skills/ (project, shared)",
-                            classes="system-message",
-                        )
-                    )
         except Exception as exc:
-            await message_list.add_message(  # type: ignore[attr-type]
-                Static(
-                    f"[red]Error listing skills:[/] {exc}",
-                    classes="system-message",
-                )
+            self._post_system(ctx, f"[red]Error listing skills:[/] {exc}")
+            return
+
+        if args:
+            skill = result.get("skill")
+            if not skill:
+                self._post_system(ctx, f"[yellow]Skill not found:[/] {args[0]}")
+                return
+            instructions = str(skill.get("instructions", ""))
+            preview = instructions[:500] + "..." if len(instructions) > 500 else instructions
+            self._post_system(
+                ctx,
+                f"[bold cyan]{skill['name']}[/]\n"
+                f"[dim]Source:[/] {skill.get('source', 'unknown')}\n"
+                f"[dim]Description:[/] {skill.get('description', 'N/A')}\n\n"
+                f"[dim]Instructions preview:[/]\n{preview}",
             )
+            return
+
+        skills = result.get("skills", [])
+        if not skills:
+            self._post_system(
+                ctx,
+                "[dim]No skills found.[/]\n"
+                "[dim]Skills are loaded from:[/]\n"
+                "  • malibu/skills/builtin/\n"
+                "  • ~/.malibu/skills/\n"
+                "  • ~/.agents/skills/\n"
+                "  • .malibu/skills/\n"
+                "  • .agents/skills/",
+            )
+            return
+
+        lines = ["[bold]Available Skills:[/]\n"]
+        for skill in skills:
+            status = "[green]✓[/]" if skill.get("enabled", True) else "[red]✗[/]"
+            source = f"[dim]({skill.get('source', 'unknown')})[/]"
+            description = str(skill.get("description", ""))
+            short_description = description[:60] + "..." if len(description) > 60 else description
+            lines.append(f"  {status} [cyan]{skill['name']}[/] {source}")
+            lines.append(f"      [dim]{short_description}[/]")
+        self._post_system(ctx, "\n".join(lines))
+
+    @staticmethod
+    def _post_system(ctx: CommandContext, text: str) -> None:
+        from acp.schema import AgentMessageChunk, TextContentBlock
+        from malibu.tui.bridge import SessionUpdateMessage
+
+        update = AgentMessageChunk(
+            session_update="agent_message_chunk",
+            content=TextContentBlock(type="text", text=text),
+        )
+        ctx.app.post_message(SessionUpdateMessage(ctx.session_id, update))
