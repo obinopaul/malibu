@@ -127,7 +127,7 @@ class ThoughtMessage(BaseMessage):
         width: 1fr;
         padding: 0 1;
         margin: 0 0 1 0;
-        color: $text-muted;
+        color: #5C6370;
         text-style: italic;
     }
     """
@@ -280,7 +280,7 @@ class PlanEntryMessage(BaseMessage):
         width: 1fr;
         padding: 0 1;
         margin: 0;
-        color: $text-muted;
+        color: #5C6370;
     }
     """
 

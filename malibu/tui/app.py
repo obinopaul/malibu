@@ -8,13 +8,11 @@ ACP callbacks into Textual message posting.
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 from pathlib import Path
 from typing import Any
 
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding
 
 from malibu.tui.bridge import SessionUpdateMessage, PermissionRequestMessage, TUIBridge
@@ -72,17 +70,18 @@ class MalibuApp(App):
 
         self._start_agent()
 
-    @work(thread=True, exclusive=True, group="agent")
-    def _start_agent(self) -> None:
-        """Spawn the agent subprocess and connect via ACP in a worker thread."""
-        asyncio.run(self._connect_agent())
+    @work(exclusive=True, group="agent")
+    async def _start_agent(self) -> None:
+        """Spawn the agent subprocess and connect via ACP."""
+        await self._connect_agent()
 
     async def _connect_agent(self) -> None:
         """Establish ACP connection to the agent subprocess."""
-        from acp import PROTOCOL_VERSION, spawn_agent_process
+        from acp import PROTOCOL_VERSION
 
         from malibu.client.client import MalibuClient
         from malibu.config import get_settings
+        from malibu.local_agent_connection import connect_local_agent
         from malibu.mcp.discovery import discover_mcp_servers
         from malibu.telemetry.logging import setup_logging
 
@@ -97,21 +96,10 @@ class MalibuApp(App):
             permission_handler=self._bridge.permission_handler,
         )
 
-        env = os.environ.copy()
-        src_dir = str(Path(__file__).resolve().parent.parent.parent)
-        env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
-        env["LANGSMITH_TRACING"] = "false"
-        env["LANGCHAIN_TRACING_V2"] = "false"
-
         # Discover MCP servers
         mcp_servers = discover_mcp_servers(self._cwd)
 
-        async with spawn_agent_process(
-            client,
-            sys.executable,
-            "-m", "malibu", "server",
-            env=env,
-        ) as (conn, process):
+        async with connect_local_agent(client, settings=settings) as (conn, process):
             self._conn = conn
             self._process = process
 
@@ -143,7 +131,7 @@ class MalibuApp(App):
                         pass
 
                 # Block until the app exits
-                while not self._exit:
+                while not self._closing:
                     await asyncio.sleep(0.5)
             finally:
                 stderr_task.cancel()
@@ -182,10 +170,10 @@ class MalibuApp(App):
     # Public API — used by ChatScreen and commands
     # ------------------------------------------------------------------
 
-    @work(thread=True, group="prompt")
-    def send_prompt(self, text: str) -> None:
+    @work(group="prompt")
+    async def send_prompt(self, text: str) -> None:
         """Send a user prompt to the agent — called from ChatScreen."""
-        asyncio.run(self._send_prompt_async(text))
+        await self._send_prompt_async(text)
 
     async def _send_prompt_async(self, text: str) -> None:
         """Dispatch text as slash-command or ACP prompt."""
@@ -263,11 +251,6 @@ class MalibuApp(App):
     @property
     def cwd(self) -> str:
         return self._cwd
-
-    @property
-    def _exit(self) -> bool:
-        """Check if the app has been asked to exit."""
-        return self._closing
 
     def exit(self, result: object = None, *args: object, **kwargs: object) -> None:
         """Signal the agent loop to stop, then exit normally."""

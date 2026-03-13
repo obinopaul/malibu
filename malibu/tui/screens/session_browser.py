@@ -37,13 +37,13 @@ class SessionBrowserScreen(ModalScreen[str | None]):
     DEFAULT_CSS = """
     SessionBrowserScreen {
         align: center middle;
-        background: $bg-primary 80%;
+        background: #0A0E14 80%;
     }
     #browser-container {
         width: 90;
         height: 24;
-        border: round $brand-primary;
-        background: $bg-surface;
+        border: round #0077B6;
+        background: #1A1F2B;
         padding: 1 2;
     }
     #browser-title {
@@ -52,7 +52,7 @@ class SessionBrowserScreen(ModalScreen[str | None]):
         margin-bottom: 1;
     }
     #browser-hint {
-        color: $text-muted;
+        color: #5C6370;
         text-align: center;
         margin-top: 1;
     }

@@ -69,7 +69,7 @@ class PlanPanel(Widget):
     }
 
     .plan-entry-pending {
-        color: $text-muted;
+        color: #5C6370;
     }
     """
 

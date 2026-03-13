@@ -215,6 +215,7 @@ class ChatScreen(Screen):
     @on(ChatInput.Submitted)
     def handle_chat_submitted(self, message: ChatInput.Submitted) -> None:
         """Forward submitted text to the application's send_prompt method."""
+        self.query_one(MessageList).append_user_message(message.text)
         if hasattr(self.app, "send_prompt"):
             self.app.send_prompt(message.text)  # type: ignore[attr-defined]
 

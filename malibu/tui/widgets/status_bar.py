@@ -36,7 +36,7 @@ class StatusBar(Static):
         dock: bottom;
         height: 1;
         background: $surface;
-        color: $text-muted;
+        color: #5C6370;
         padding: 0 1;
     }
     """

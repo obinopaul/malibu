@@ -46,21 +46,21 @@ class WelcomeScreen(Screen):
     DEFAULT_CSS = """
     WelcomeScreen {
         align: center middle;
-        background: $bg-primary;
+        background: #0A0E14;
     }
     #welcome-container {
         width: 60;
         height: auto;
         padding: 2 4;
-        border: round $brand-primary;
-        background: $bg-surface;
+        border: round #0077B6;
+        background: #1A1F2B;
     }
     #banner {
-        color: $brand-secondary;
+        color: #00B4D8;
         text-align: center;
     }
     #version {
-        color: $text-muted;
+        color: #5C6370;
         text-align: center;
         margin-bottom: 1;
     }

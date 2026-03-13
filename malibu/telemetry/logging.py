@@ -51,7 +51,8 @@ def setup_logging(settings: Settings) -> None:
         ],
     )
 
-    handler = logging.StreamHandler(sys.stdout)
+    # ACP server mode speaks JSON-RPC over stdout, so logs must go to stderr.
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()

@@ -137,7 +137,6 @@ class SessionManager:
             extra_tools=extra_tools or None,
             extra_prompt=extra_prompt or None,
             hook_manager=hook_manager,
-            callbacks=[cost_callback] if cost_callback else None,
         )
         self._agents[session_id] = agent
         self._cwds[session_id] = cwd
@@ -254,3 +253,8 @@ class SessionManager:
         data = tracker.to_dict()
         data["formatted_cost"] = tracker.format_cost()
         return data
+
+    def get_callbacks(self, session_id: str) -> list[Any]:
+        """Return per-run callbacks for a session."""
+        callback = self._cost_callbacks.get(session_id)
+        return [callback] if callback is not None else []

@@ -57,8 +57,12 @@ class ChatInput(TextArea):
     # ---- key handling ----
 
     async def _on_key(self, event: events.Key) -> None:  # noqa: C901
-        # Enter without Shift => submit
-        if event.key == "enter" and not event.shift:
+        # Modifier+Enter variants insert a newline in this Textual version.
+        if self._should_insert_newline(event):
+            return
+
+        # Plain Enter => submit
+        if self._is_submit_key(event):
             event.prevent_default()
             event.stop()
             text = self.text.strip()
@@ -85,6 +89,31 @@ class ChatInput(TextArea):
                 event.stop()
                 self._navigate_history(1)
                 return
+
+    @staticmethod
+    def _should_insert_newline(event: events.Key) -> bool:
+        """Return ``True`` when the key event should insert a newline.
+
+        Textual's ``Key`` event exposes combined modifier names and aliases
+        (for example ``shift+enter`` or ``ctrl+j``), not ``event.shift``.
+        """
+        newline_keys = {
+            "shift+enter",
+            "ctrl+j",
+            "alt+enter",
+            "ctrl+enter",
+            "newline",
+        }
+        if event.key in newline_keys:
+            return True
+        if any(alias in newline_keys for alias in event.aliases):
+            return True
+        return event.character == "\n"
+
+    @classmethod
+    def _is_submit_key(cls, event: events.Key) -> bool:
+        """Return ``True`` when Enter should submit the current input."""
+        return event.key in {"enter", "return"} and not cls._should_insert_newline(event)
 
     # ---- history helpers ----
 

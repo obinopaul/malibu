@@ -7,6 +7,8 @@ import subprocess
 
 from pathlib import Path
 
+from malibu.subprocess_compat import create_subprocess_exec
+
 
 PROMPT = """You are given a prompt describing a video. Your task is to break down the video description into {n_scenes} scene prompts.
 
@@ -154,7 +156,7 @@ async def extract_last_frame(video_path: Path, output_path: Path):
     ]
 
     # Run command
-    proc = await asyncio.create_subprocess_exec(
+    proc = await create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
@@ -201,7 +203,7 @@ async def merge_videos(video_paths: list[Path], output_path: Path, temp_dir: Pat
         ]
 
     # Run command
-    proc = await asyncio.create_subprocess_exec(
+    proc = await create_subprocess_exec(
         *concat_cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE

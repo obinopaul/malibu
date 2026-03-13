@@ -291,7 +291,10 @@ class MalibuAgent(ACPAgent):
         for block in prompt:
             content_blocks.extend(convert_any_block(block, root_dir=cwd))
 
-        config = {"configurable": {"thread_id": session_id}}
+        config: dict[str, Any] = {"configurable": {"thread_id": session_id}}
+        callbacks = self._session_mgr.get_callbacks(session_id)
+        if callbacks:
+            config["callbacks"] = callbacks
         accumulator = ToolCallAccumulator()
         user_decisions: list[dict[str, Any]] = []
         current_state = None

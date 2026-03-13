@@ -19,6 +19,7 @@ Plus the on_connect callback.
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from acp import Client
@@ -133,7 +134,9 @@ class MalibuClient(Client):
         # Feed into accumulator for state tracking
         self._accumulator.process_update(session_id, update)
         # Render to display (console or TUI)
-        self._display_handler(session_id, update, **kwargs)
+        result = self._display_handler(session_id, update, **kwargs)
+        if inspect.isawaitable(result):
+            await result
 
     # ───────────────────────────────────────────────────────────
     # 3. write_text_file

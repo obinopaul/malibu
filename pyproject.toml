@@ -29,6 +29,7 @@ dependencies = [
     "langchain-core>=1.0,<2.0",
     "langgraph>=1.0,<2.0",
     "langsmith>=0.3.0",
+    "deepagents",
     # Model providers (install those you need)
     "langchain-openai",
     "langchain-anthropic",

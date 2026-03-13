@@ -29,7 +29,8 @@ malibu
 uv run malibu
 
 # Option 2: Activate venv first, then call directly
-.venv\Scripts\activate
+.venv-fresh\Scripts\activate
+
 malibu
 
 ```

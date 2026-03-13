@@ -140,10 +140,11 @@ async def _run_server() -> int:
 # ═══════════════════════════════════════════════════════════════════
 
 async def _run_client(agent_cmd: list[str], cwd: str) -> int:
-    from acp import PROTOCOL_VERSION, spawn_agent_process
+    from acp import PROTOCOL_VERSION
 
     from malibu.client.client import MalibuClient
     from malibu.config import get_settings
+    from malibu.subprocess_compat import spawn_agent_process
     from malibu.telemetry.logging import setup_logging
 
     settings = get_settings()
@@ -154,7 +155,13 @@ async def _run_client(agent_cmd: list[str], cwd: str) -> int:
 
     env = os.environ.copy()
 
-    async with spawn_agent_process(client, agent_cmd[0], *agent_cmd[1:], env=env) as (conn, process):
+    async with spawn_agent_process(
+        client,
+        agent_cmd[0],
+        *agent_cmd[1:],
+        env=env,
+        cwd=abs_cwd,
+    ) as (conn, process):
         await conn.initialize(protocol_version=PROTOCOL_VERSION, client_capabilities=None)
         session = await conn.new_session(mcp_servers=[], cwd=abs_cwd)
         await _interactive_loop(conn, session.session_id)
@@ -207,10 +214,11 @@ async def _drain_stderr(process: asyncio.subprocess.Process) -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 async def _run_duet(cwd: str) -> int:
-    from acp import PROTOCOL_VERSION, spawn_agent_process
+    from acp import PROTOCOL_VERSION
 
     from malibu.client.client import MalibuClient
     from malibu.config import get_settings
+    from malibu.local_agent_connection import connect_local_agent
     from malibu.telemetry.logging import setup_logging
 
     settings = get_settings()
@@ -219,18 +227,7 @@ async def _run_duet(cwd: str) -> int:
     abs_cwd = str(Path(cwd).resolve())
     client = MalibuClient(settings, cwd=abs_cwd)
 
-    env = os.environ.copy()
-    src_dir = str(Path(__file__).resolve().parent.parent)
-    env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
-    env["LANGSMITH_TRACING"] = "false"
-    env["LANGCHAIN_TRACING_V2"] = "false"
-
-    async with spawn_agent_process(
-        client,
-        sys.executable,
-        "-m", "malibu", "server",
-        env=env,
-    ) as (conn, process):
+    async with connect_local_agent(client, settings=settings) as (conn, process):
         stderr_task = asyncio.create_task(_drain_stderr(process))
         try:
             await asyncio.wait_for(

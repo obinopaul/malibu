@@ -21,6 +21,7 @@ from acp.schema import (
 )
 
 from malibu.telemetry.logging import get_logger
+from malibu.subprocess_compat import create_subprocess_exec
 
 log = get_logger(__name__)
 
@@ -41,7 +42,7 @@ class _Terminal:
     def __init__(
         self,
         terminal_id: str,
-        process: asyncio.subprocess.Process,
+        process: Any,
         cwd: str,
         output_limit: int | None,
     ) -> None:
@@ -96,7 +97,7 @@ class TerminalManager:
             for ev in env:
                 proc_env[ev.name] = ev.value
 
-        process = await asyncio.create_subprocess_exec(
+        process = await create_subprocess_exec(
             *cmd_parts,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,

@@ -41,7 +41,6 @@ def build_agent(
     extra_tools: list | None = None,
     extra_prompt: str | None = None,
     hook_manager: Any | None = None,
-    callbacks: list | None = None,
     extra_middleware: list | None = None,
 ) -> CompiledStateGraph:
     """Build and return a compiled Malibu agent graph.
@@ -62,7 +61,6 @@ def build_agent(
         extra_tools: Additional tools to include (from skills, MCP, subagents).
         extra_prompt: Additional prompt text to append (from skills).
         hook_manager: Optional HookManager for lifecycle hooks.
-        callbacks: Optional list of LangChain callback handlers (e.g. CostTrackingCallback).
         extra_middleware: Optional list of additional middleware to append.
 
     Returns:
@@ -134,7 +132,7 @@ def build_agent(
 
     # Deep Agents' local shell backend is not available in the installed runtime.
     # Malibu now provides shell and filesystem access through native LangChain tools.
-    backend = FilesystemBackend(root_dir=Path(cwd))
+    backend = FilesystemBackend(root_dir=Path(cwd), virtual_mode=True)
 
     # Load Subagents using our new module
     from malibu.agent.subagents.loader import list_subagents
@@ -172,9 +170,6 @@ def build_agent(
         "backend": backend,
         "subagents": subagents,
     }
-    if callbacks:
-        agent_kwargs["callbacks"] = callbacks
-
     agent = create_deep_agent(**agent_kwargs)
 
     return agent
