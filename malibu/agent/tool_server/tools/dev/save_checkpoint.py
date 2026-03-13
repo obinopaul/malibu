@@ -2,9 +2,9 @@ import os
 import subprocess
 from typing import Any, Optional
 
-from backend.src.tool_server.core.workspace import FileSystemValidationError, WorkspaceManager
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
-from backend.src.tool_server.logger import get_logger
+from malibu.agent.tool_server.core.workspace import FileSystemValidationError, WorkspaceManager
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.logger import get_logger
 
 
 NAME = "save_checkpoint"
@@ -317,3 +317,4 @@ class SaveCheckpointTool(BaseTool):
                 "commit_message": commit_message,
             }
         )
+

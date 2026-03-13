@@ -2,11 +2,6 @@ from typing import Optional, Literal, List
 
 from ..logger import get_logger
 from .base import BaseWebVisitClient
-from .firecrawl import FireCrawlWebVisitClient
-from .gemini import GeminiWebVisitClient
-from .jina import JinaWebVisitClient
-from .tavily import TavilyWebVisitClient
-from .beautifulsoup import BeautifulSoupWebVisitClient
 from .config import WebVisitConfig, CompressorConfig
 
 logger = get_logger("tool_server.web_visit.factory")
@@ -60,7 +55,8 @@ def create_web_visit_client(settings: WebVisitConfig, compressor_config: Compres
             next_client = _get_next_available_client("firecrawl")
             logger.warning("FireCrawl API key not found. Falling back to %s client", next_client)
         else:
-            logger.info("Using FireCrawl Client")
+            from .firecrawl import FireCrawlWebVisitClient
+
             return FireCrawlWebVisitClient(api_key=firecrawl_key, compressor_config=compressor_config)
 
     if client_type == "gemini":
@@ -68,7 +64,8 @@ def create_web_visit_client(settings: WebVisitConfig, compressor_config: Compres
             next_client = _get_next_available_client("gemini")
             logger.warning("Gemini API key not found. Falling back to %s client", next_client)
         else:
-            print("Using Gemini Client")
+            from .gemini import GeminiWebVisitClient
+
             return GeminiWebVisitClient(api_key=gemini_key)
 
     if client_type == "jina":
@@ -76,7 +73,8 @@ def create_web_visit_client(settings: WebVisitConfig, compressor_config: Compres
             next_client = _get_next_available_client("jina")
             logger.warning("Jina API key not found. Falling back to %s client", next_client)
         else:
-            logger.info("Using Jina Client")
+            from .jina import JinaWebVisitClient
+
             return JinaWebVisitClient(api_key=jina_key, compressor_config=compressor_config)
 
     if client_type == "tavily":
@@ -84,32 +82,39 @@ def create_web_visit_client(settings: WebVisitConfig, compressor_config: Compres
             next_client = _get_next_available_client("tavily")
             logger.warning("Tavily API key not found. Falling back to %s client", next_client)
         else:
-            logger.info("Using Tavily Client")
+            from .tavily import TavilyWebVisitClient
+
             return TavilyWebVisitClient(api_key=tavily_key, compressor_config=compressor_config)
 
     if client_type == "beautifulsoup":
-        logger.info("Using Soup Client")
+        from .beautifulsoup import BeautifulSoupWebVisitClient
+
         return BeautifulSoupWebVisitClient(compressor_config=compressor_config)
 
     # Default priority order if no client_type specified
     if firecrawl_key:
-        logger.info("Using FireCrawl to visit webpage")
+        from .firecrawl import FireCrawlWebVisitClient
+
         return FireCrawlWebVisitClient(api_key=firecrawl_key, compressor_config=compressor_config)
 
     if gemini_key:
-        logger.info("Using Gemini to visit webpage")
+        from .gemini import GeminiWebVisitClient
+
         return GeminiWebVisitClient(api_key=gemini_key)
 
     if jina_key:
-        logger.info("Using Jina to visit webpage")
+        from .jina import JinaWebVisitClient
+
         return JinaWebVisitClient(api_key=jina_key, compressor_config=compressor_config)
 
     if tavily_key:
-        logger.info("Using Tavily to visit webpage")
+        from .tavily import TavilyWebVisitClient
+
         return TavilyWebVisitClient(api_key=tavily_key, compressor_config=compressor_config)
 
     # Fall back to BeautifulSoup if no API keys are available
-    logger.info("Using BeautifulSoup to visit webpage (no API keys found)")
+    from .beautifulsoup import BeautifulSoupWebVisitClient
+
     return BeautifulSoupWebVisitClient(compressor_config=compressor_config)
 
 
@@ -135,23 +140,31 @@ def create_all_web_visit_clients(settings: WebVisitConfig, compressor_config: Co
 
     if firecrawl_key:
         try:
+            from .firecrawl import FireCrawlWebVisitClient
+
             clients.append(FireCrawlWebVisitClient(api_key=firecrawl_key, compressor_config=compressor_config))
         except Exception:
             pass
 
     if jina_key:
         try:
+            from .jina import JinaWebVisitClient
+
             clients.append(JinaWebVisitClient(api_key=jina_key, compressor_config=compressor_config))
         except Exception:
             pass
 
     if tavily_key:
         try:
+            from .tavily import TavilyWebVisitClient
+
             clients.append(TavilyWebVisitClient(api_key=tavily_key, compressor_config=compressor_config))
         except Exception:
             pass
 
     # Always add BeautifulSoup as the last fallback
+    from .beautifulsoup import BeautifulSoupWebVisitClient
+
     clients.append(BeautifulSoupWebVisitClient(compressor_config=compressor_config))
 
     return clients

@@ -1,106 +1,286 @@
-import libtmux
-import time
-import shlex
-from pathlib import Path
+from __future__ import annotations
 
-from libtmux._internal.query_list import ObjectDoesNotExist
-from libtmux.exc import TmuxSessionExists
-from enum import Enum
+import os
+import platform
+import shlex
+import signal
+import subprocess
+import threading
+import time
+import uuid
 from abc import ABC, abstractmethod
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import List
 
 from pydantic import BaseModel
-from .terminal_utils import capture_pane_ansi_code
 
-# This is a marker that indicates the end of the command output
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 180
-_POLL_INTERVAL = 0.5
-_DEFAULT_PROMPT_PREFIX = "root@sandbox"
-_PROMPT_FORMAT = r"\[\033[01;32m\]{PREFIX}\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ ".format(PREFIX=_DEFAULT_PROMPT_PREFIX)
-_PREFIX_SESSION_NAME = "AGENTS-BACKEND"
+_POLL_INTERVAL = 0.1
+_DONE_PREFIX = "__MALIBU_CMD_DONE__"
+_MAX_BUFFER_LINES = 2000
 
 
 class ShellResult(BaseModel):
     clean_output: str
     ansi_output: str
 
-# Shell error
+
 class ShellError(Exception):
     pass
+
 
 class ShellBusyError(ShellError):
     pass
 
+
 class ShellInvalidSessionNameError(ShellError):
     pass
+
 
 class ShellSessionNotFoundError(ShellError):
     pass
 
+
 class ShellSessionExistsError(ShellError):
     pass
+
 
 class ShellRunDirNotFoundError(ShellError):
     pass
 
+
 class ShellCommandTimeoutError(ShellError):
     pass
 
+
 class ShellOperationError(ShellError):
     pass
+
+
+TmuxSessionExists = ShellSessionExistsError
+
 
 class SessionState(Enum):
     BUSY = "busy"
     IDLE = "idle"
 
-# Base class for shell managers
+
 class BaseShellManager(ABC):
     @abstractmethod
     def get_all_sessions(self) -> List[str]:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def create_session(self, session_name: str, base_dir: str, timeout: int = _DEFAULT_TIMEOUT):
-        pass
+    def create_session(
+        self, session_name: str, base_dir: str, timeout: int = _DEFAULT_TIMEOUT
+    ) -> None:
+        raise NotImplementedError
 
     @abstractmethod
-    def delete_session(self, session_name: str):
-        pass
+    def delete_session(self, session_name: str) -> None:
+        raise NotImplementedError
 
     @abstractmethod
-    def run_command(self, session_name: str, command: str, run_dir: str | None = None, timeout: int = _DEFAULT_TIMEOUT, wait_for_output: bool = True) -> ShellResult:
-        pass
+    def run_command(
+        self,
+        session_name: str,
+        command: str,
+        run_dir: str | None = None,
+        timeout: int = _DEFAULT_TIMEOUT,
+        wait_for_output: bool = True,
+    ) -> ShellResult:
+        raise NotImplementedError
 
     @abstractmethod
-    def kill_current_command(self, session_name: str) -> ShellResult:
-        pass
+    def kill_current_command(
+        self, session_name: str, timeout: int = _DEFAULT_TIMEOUT
+    ) -> ShellResult:
+        raise NotImplementedError
 
     @abstractmethod
     def get_session_state(self, session_name: str) -> SessionState:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def get_session_output(self, session_name: str) -> ShellResult:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def write_to_process(self, session_name: str, input: str, press_enter: bool) -> ShellResult:
-        pass
+    def write_to_process(
+        self, session_name: str, input: str, press_enter: bool
+    ) -> ShellResult:
+        raise NotImplementedError
 
 
-# Tmux Shell Manager Based on Session
-class TmuxSessionManager(BaseShellManager):
-    def __init__(self):
-        self.server = libtmux.Server()
-        # Test server connection
-        self.server.sessions
-    
+@dataclass
+class _CommandTracker:
+    token: str
+    event: threading.Event = field(default_factory=threading.Event)
+    exit_code: int | None = None
+
+
+@dataclass
+class _ShellSession:
+    name: str
+    process: subprocess.Popen[str]
+    cwd: str
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    output_lines: list[str] = field(default_factory=list)
+    tracker: _CommandTracker | None = None
+    reader: threading.Thread | None = None
+
+    def append_output(self, line: str) -> None:
+        with self.lock:
+            self.output_lines.append(line.rstrip("\r\n"))
+            if len(self.output_lines) > _MAX_BUFFER_LINES:
+                self.output_lines = self.output_lines[-_MAX_BUFFER_LINES:]
+
+    def current_output(self) -> ShellResult:
+        with self.lock:
+            text = "\n".join(self.output_lines).strip()
+        return ShellResult(clean_output=text, ansi_output=text)
+
+
+class LocalShellSessionManager(BaseShellManager):
+    """Cross-platform persistent shell session manager."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, _ShellSession] = {}
+        self._is_windows = platform.system() == "Windows"
+
+    def get_all_sessions(self) -> List[str]:
+        self._prune_dead_sessions()
+        return sorted(self._sessions.keys())
+
+    def create_session(
+        self, session_name: str, start_directory: str, timeout: int = _DEFAULT_TIMEOUT
+    ) -> None:
+        self._validate_session_name(session_name)
+        start_directory = self._validate_directory(start_directory)
+        if session_name in self._sessions:
+            raise ShellSessionExistsError(f"Session '{session_name}' already exists")
+
+        process = self._spawn_process(start_directory)
+        session = _ShellSession(
+            name=session_name,
+            process=process,
+            cwd=start_directory,
+        )
+        session.reader = threading.Thread(
+            target=self._reader_loop,
+            args=(session,),
+            daemon=True,
+            name=f"shell-reader-{session_name}",
+        )
+        session.reader.start()
+        self._sessions[session_name] = session
+        self._wait_for_shell_ready(timeout=timeout)
+
+    def delete_session(self, session_name: str) -> None:
+        session = self._require_session(session_name)
+        self._terminate_process(session.process)
+        self._sessions.pop(session_name, None)
+
+    def run_command(
+        self,
+        session_name: str,
+        command: str,
+        run_dir: str | None = None,
+        timeout: int = _DEFAULT_TIMEOUT,
+        wait_for_output: bool = True,
+    ) -> ShellResult:
+        session = self._require_session(session_name)
+        if self.get_session_state(session_name) == SessionState.BUSY:
+            raise ShellBusyError("Session is busy, the last command is not finished.")
+
+        if run_dir:
+            run_dir = self._validate_directory(run_dir)
+            session.cwd = run_dir
+
+        tracker = _CommandTracker(token=uuid.uuid4().hex)
+        with session.lock:
+            session.tracker = tracker
+
+        payload = self._build_command_payload(command, tracker.token, run_dir)
+        self._write(session, payload)
+
+        if wait_for_output:
+            finished = tracker.event.wait(timeout=min(timeout, _MAX_TIMEOUT))
+            if not finished:
+                raise ShellCommandTimeoutError("Command timed out")
+
+        return session.current_output()
+
+    def kill_current_command(
+        self, session_name: str, timeout: int = _DEFAULT_TIMEOUT
+    ) -> ShellResult:
+        session = self._require_session(session_name)
+        tracker = session.tracker
+        if tracker is None:
+            return session.current_output()
+
+        self._interrupt_process(session.process)
+        finished = tracker.event.wait(timeout=min(timeout, 5))
+        if not finished:
+            interrupted_line = None
+            with session.lock:
+                if session.tracker is tracker:
+                    interrupted_line = "[command interrupted]"
+                    tracker.exit_code = 130
+                    tracker.event.set()
+                    session.tracker = None
+            if interrupted_line is not None:
+                session.append_output(interrupted_line)
+        return session.current_output()
+
+    def get_session_state(self, session_name: str) -> SessionState:
+        session = self._require_session(session_name)
+        if session.process.poll() is not None:
+            return SessionState.IDLE
+        return SessionState.BUSY if session.tracker is not None else SessionState.IDLE
+
+    def get_session_output(self, session_name: str) -> ShellResult:
+        session = self._require_session(session_name)
+        return session.current_output()
+
+    def write_to_process(
+        self, session_name: str, input: str, press_enter: bool
+    ) -> ShellResult:
+        session = self._require_session(session_name)
+        payload = input + ("\n" if press_enter else "")
+        self._write(session, payload)
+        time.sleep(0.1)
+        return session.current_output()
+
+    def _prune_dead_sessions(self) -> None:
+        dead = [
+            name
+            for name, session in self._sessions.items()
+            if session.process.poll() is not None
+        ]
+        for name in dead:
+            self._sessions.pop(name, None)
+
+    def _require_session(self, session_name: str) -> _ShellSession:
+        self._prune_dead_sessions()
+        session = self._sessions.get(session_name)
+        if session is None:
+            raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
+        return session
+
+    def _validate_session_name(self, session_name: str) -> None:
+        if not session_name or not session_name.replace("_", "").replace("-", "").isalnum():
+            raise ShellInvalidSessionNameError(
+                "Invalid session name. Only alphanumeric characters, hyphens, and underscores are allowed."
+            )
+
     def _validate_directory(self, directory: str) -> str:
-        """Validate and normalize directory path."""
         if not directory.strip():
             raise ShellRunDirNotFoundError("Directory path cannot be empty")
-        
+
         try:
             path = Path(directory).resolve()
             if not path.exists():
@@ -108,296 +288,137 @@ class TmuxSessionManager(BaseShellManager):
             if not path.is_dir():
                 raise ShellRunDirNotFoundError(f"Path is not a directory: {directory}")
             return str(path)
-        except (OSError, RuntimeError) as e:
-            raise ShellRunDirNotFoundError(f"Invalid directory path: {e}")
-    
-    def get_all_sessions(self) -> List[str]:
-        return [session.name for session in self.server.sessions if session and session.name]
+        except (OSError, RuntimeError) as exc:
+            raise ShellRunDirNotFoundError(f"Invalid directory path: {exc}") from exc
 
-    def create_session(self, session_name: str, start_directory: str, timeout: int = _DEFAULT_TIMEOUT):
-        """Create a new session with the given name and start directory."""
-        if not session_name or not session_name.replace('_', '').replace('-', '').isalnum():
-            raise ShellInvalidSessionNameError("Invalid session name. Only alphanumeric characters, hyphens, and underscores are allowed.")
-        
-        start_directory = self._validate_directory(start_directory)
-        
-        try:
-            # Create session with bash shell and maximize the window
-            self.server.new_session(session_name, start_directory=start_directory, shell="/bin/bash", x=999, y=999)
+    def _spawn_process(self, cwd: str) -> subprocess.Popen[str]:
+        kwargs: dict[str, object] = {
+            "cwd": cwd,
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+            "env": {**os.environ, "TERM": os.environ.get("TERM", "xterm-256color")},
+        }
 
-            # Customize the prompt for easier getting the state of the session
-            pane = self._get_active_pane(session_name)
-            pane.send_keys(f"export PS1='{_PROMPT_FORMAT}'; clear")
-            pane.send_keys(f"export TERM='xterm-256color'")
-            self._wait_for_session_idle(session_name, timeout=timeout)
+        if self._is_windows:
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            return subprocess.Popen(
+                ["pwsh", "-NoLogo", "-NoProfile", "-NoExit"],
+                **kwargs,
+            )
 
-        except TmuxSessionExists:
-            raise ShellSessionExistsError(f"Session '{session_name}' already exists")
+        kwargs["preexec_fn"] = os.setsid
+        return subprocess.Popen(
+            ["/bin/bash", "-l"],
+            **kwargs,
+        )
 
-    def delete_session(self, session_name: str):        
-        try:
-            session = self.server.sessions.get(name=session_name)
-            if not session:
-                raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
-            session.kill()
-        except ObjectDoesNotExist:
-            raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
+    def _reader_loop(self, session: _ShellSession) -> None:
+        stdout = session.process.stdout
+        if stdout is None:
+            return
 
-    def get_session_output(self, session_name: str) -> ShellResult:
-        pane = self._get_active_pane(session_name)
-
-        clean_capture = pane.capture_pane(start="-", end="-")
-        ansi_capture = capture_pane_ansi_code(pane, start="-", end="-")
-        if not isinstance(clean_capture, list):
-            return ShellResult(clean_output="", ansi_output="")
-        
-        full_clean_output = "\n".join(clean_capture)
-        full_ansi_output = "\n".join(ansi_capture)
-        
-        return ShellResult(clean_output=full_clean_output, ansi_output=full_ansi_output)
-
-    def get_session_state(self, session_name: str) -> SessionState:        
-        pane = self._get_active_pane(session_name)
-        current_view = capture_pane_ansi_code(pane, start="-", end="-")
-        
-        if not isinstance(current_view, list):
-            return SessionState.IDLE
-            
-        last_line = current_view[-1]
-        if _DEFAULT_PROMPT_PREFIX in last_line and (last_line.endswith("$") or last_line.endswith("#")):
-            return SessionState.IDLE
-        return SessionState.BUSY
-
-    def run_command(self, session_name: str, command: str, run_dir: str | None = None, 
-                   timeout: int = _DEFAULT_TIMEOUT, wait_for_output: bool = True) -> ShellResult:        
-        # Validate and normalize the run directory
-        if run_dir:
-            run_dir = self._validate_directory(run_dir)
-        
-        pane = self._get_active_pane(session_name)
-
-        # Check if session is busy
-        if self.get_session_state(session_name) == SessionState.BUSY:
-            raise ShellBusyError("Session is busy, the last command is not finished.")
-
-        # Change directory
-        if run_dir:
-            escaped_dir = shlex.quote(run_dir)
-            pane.send_keys(f"cd {escaped_dir}")
-            time.sleep(0.1)
-
-        # Clear before running the actual command
-        pane.send_keys("clear")
-        time.sleep(0.1)
-
-        pane.send_keys(command)
-        time.sleep(0.1)
-
-        if wait_for_output:
-            self._wait_for_session_idle(session_name, timeout=timeout)
-
-        return self.get_session_output(session_name)
-
-    def kill_current_command(self, session_name: str, timeout: int = _DEFAULT_TIMEOUT) -> ShellResult:
-        """Kill the currently running command in the specified session by sending SIGINT (Ctrl+C)."""
-        pane = self._get_active_pane(session_name)
-
-        # Send Ctrl+C to interrupt the current command
-        pane.send_keys("C-c")
-
-        self._wait_for_session_idle(session_name, timeout=timeout)
-
-        return self.get_session_output(session_name)
-
-    def write_to_process(self, session_name: str, input: str, press_enter: bool) -> ShellResult:
-        pane = self._get_active_pane(session_name)
-        pane.send_keys(input, enter=press_enter)
-        time.sleep(0.1)
-        return self.get_session_output(session_name)
-
-    def _get_active_pane(self, session_name: str) -> libtmux.Pane:
-        try:
-            session = self.server.sessions.get(name=session_name)
-            if not session:
-                raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
-            
-            window = session.active_window
-            if not window:
-                raise ShellOperationError("No active window found in session")
-
-            pane = window.active_pane
-            if not pane:
-                raise ShellOperationError("No active pane found in window")
-            return pane
-        except ObjectDoesNotExist:
-            raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
-
-    def _wait_for_session_idle(self, session_name: str, poll_interval: float = _POLL_INTERVAL, timeout: int = _DEFAULT_TIMEOUT):
-        """Wait for the session to be idle."""
-        timeout = min(timeout, _MAX_TIMEOUT)
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if self.get_session_state(session_name) == SessionState.IDLE:
+        for raw_line in iter(stdout.readline, ""):
+            if not raw_line:
                 break
-            time.sleep(poll_interval)
-        else:
-            raise ShellCommandTimeoutError("Session creation timed out")
+            stripped = raw_line.strip()
+            if stripped.startswith(_DONE_PREFIX):
+                token, _, exit_code_text = stripped.partition(":")
+                token = token.removeprefix(_DONE_PREFIX)
+                with session.lock:
+                    tracker = session.tracker
+                    if tracker and tracker.token == token:
+                        try:
+                            tracker.exit_code = int(exit_code_text)
+                        except ValueError:
+                            tracker.exit_code = None
+                        tracker.event.set()
+                        session.tracker = None
+                continue
+            session.append_output(raw_line)
 
+        with session.lock:
+            tracker = session.tracker
+            session.tracker = None
+        if tracker:
+            tracker.exit_code = session.process.poll()
+            tracker.event.set()
 
-# Tmux Shell Manager Based on Window
-class TmuxWindowManager(BaseShellManager):
-    def __init__(self, chat_session_id: str):
-        self.server = libtmux.Server()
-
-        self._default_window_name = "main"
-        self.session = self.server.new_session(
-            f"{_PREFIX_SESSION_NAME}{chat_session_id}", 
-            kill_session=True, 
-            shell="/bin/bash", 
-            x=999, 
-            y=999,
-            window_name=self._default_window_name) # default window name
-        self._configure_session(self._default_window_name)
-    
-    def _validate_directory(self, directory: str) -> str:
-        """Validate and normalize directory path."""
-        if not directory.strip():
-            raise ShellRunDirNotFoundError("Directory path cannot be empty")
-        
-        try:
-            path = Path(directory).resolve()
-            if not path.exists():
-                raise ShellRunDirNotFoundError(f"Directory does not exist: {directory}")
-            if not path.is_dir():
-                raise ShellRunDirNotFoundError(f"Path is not a directory: {directory}")
-            return str(path)
-        except (OSError, RuntimeError) as e:
-            raise ShellRunDirNotFoundError(f"Invalid directory path: {e}")
-    
-    def get_all_sessions(self) -> List[str]:
-        return [window.name for window in self.session.windows if window and window.name]
-
-    def _configure_session(self, session_name: str, timeout: int = _DEFAULT_TIMEOUT):
-        pane = self._get_active_pane(session_name)
-        pane.send_keys(f"export PS1='{_PROMPT_FORMAT}'; clear")
-        pane.send_keys(f"export TERM='xterm-256color'")
-        self._wait_for_session_idle(session_name, timeout=timeout) # wait for the session to be idle
-
-    def create_session(self, session_name: str, start_directory: str, timeout: int = _DEFAULT_TIMEOUT):
-        """Create a new session with the given name and start directory."""
-        if not session_name or not session_name.replace('_', '').replace('-', '').isalnum():
-            raise ShellInvalidSessionNameError("Invalid session name. Only alphanumeric characters, hyphens, and underscores are allowed.")
-        
-        start_directory = self._validate_directory(start_directory)
-        
-        try:
-            # Create session with bash shell and maximize the window
-            self.session.new_window(window_name=session_name, start_directory=start_directory, attach=True)
-
-            # Customize the prompt for easier getting the state of the session
-            self._configure_session(session_name, timeout=timeout)
-
-        except TmuxSessionExists:
-            raise ShellSessionExistsError(f"Session '{session_name}' already exists")
-
-    def delete_session(self, session_name: str):        
-        try:
-            window = self.session.windows.get(name=session_name)
-            if not window:
-                raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
-            window.kill()
-        except ObjectDoesNotExist:
-            raise ShellSessionNotFoundError(f"Session '{session_name}' not found")
-
-    def get_session_output(self, session_name: str) -> ShellResult:
-        pane = self._get_active_pane(session_name)
-        ansi_capture = capture_pane_ansi_code(pane, start="-", end="-")
-        clean_capture = pane.capture_pane(start="-", end="-")
-        if not isinstance(ansi_capture, list) or not isinstance(clean_capture, list):
-            return ShellResult(clean_output="", ansi_output="")
-        full_ansi_output = "\n".join(ansi_capture)
-        full_clean_output = "\n".join(clean_capture)
-        return ShellResult(clean_output=full_clean_output, ansi_output=full_ansi_output)
-
-    def get_session_state(self, session_name: str) -> SessionState:        
-        pane = self._get_active_pane(session_name)
-        current_view = pane.capture_pane(start="-", end="-")
-        
-        if not isinstance(current_view, list):
-            return SessionState.IDLE
-            
-        last_line = current_view[-1]
-        if _DEFAULT_PROMPT_PREFIX in last_line and last_line.endswith("$"):
-            return SessionState.IDLE
-        return SessionState.BUSY
-
-    def run_command(self, session_name: str, command: str, run_dir: str | None = None, 
-                   timeout: int = _DEFAULT_TIMEOUT, wait_for_output: bool = True) -> ShellResult:        
-        # Validate and normalize the run directory
+    def _build_command_payload(
+        self, command: str, token: str, run_dir: str | None
+    ) -> str:
+        lines: list[str] = []
         if run_dir:
-            run_dir = self._validate_directory(run_dir)
-        
-        pane = self._get_active_pane(session_name)
+            lines.append(self._build_cd_command(run_dir))
 
-        # Check if session is busy
-        if self.get_session_state(session_name) == SessionState.BUSY:
-            raise ShellBusyError("Session is busy, the last command is not finished.")
+        lines.append(command)
 
-        # Change directory
-        if run_dir:
-            escaped_dir = shlex.quote(run_dir)
-            pane.send_keys(f"cd {escaped_dir}")
-            time.sleep(0.1)
-
-        # Clear before running the actual command
-        pane.send_keys("clear")
-        time.sleep(0.1)
-
-        pane.send_keys(command)
-        time.sleep(0.1)
-
-        if wait_for_output:
-            self._wait_for_session_idle(session_name, timeout=timeout)
-
-        return self.get_session_output(session_name)
-
-    def kill_current_command(self, session_name: str, timeout: int = _DEFAULT_TIMEOUT) -> ShellResult:
-        """Kill the currently running command in the specified session by sending SIGINT (Ctrl+C)."""
-        pane = self._get_active_pane(session_name)
-
-        # Send Ctrl+C to interrupt the current command
-        pane.send_keys("C-c")
-
-        self._wait_for_session_idle(session_name, timeout=timeout)
-
-        return self.get_session_output(session_name)
-
-    def write_to_process(self, session_name: str, input: str, press_enter: bool) -> ShellResult:
-        pane = self._get_active_pane(session_name)
-        pane.send_keys(input, enter=press_enter)
-        time.sleep(0.1)
-        return self.get_session_output(session_name)
-
-    def _get_active_pane(self, window_name: str) -> libtmux.Pane:
-        try:
-            window = self.session.windows.get(name=window_name)
-            if not window:
-                raise ShellSessionNotFoundError(f"Session '{window_name}' not found")
-            
-            pane = window.active_pane
-            if not pane:
-                raise ShellOperationError("No active pane found in window")
-            return pane
-        except ObjectDoesNotExist:
-            raise ShellSessionNotFoundError(f"Session '{window_name}' not found")
-
-    def _wait_for_session_idle(self, session_name: str, poll_interval: float = _POLL_INTERVAL, timeout: int = _DEFAULT_TIMEOUT):
-        """Wait for the session to be idle."""
-        timeout = min(timeout, _MAX_TIMEOUT)
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if self.get_session_state(session_name) == SessionState.IDLE:
-                break
-            time.sleep(poll_interval)
+        if self._is_windows:
+            lines.append(
+                "$__malibuExit = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } "
+                "elseif ($?) { 0 } else { 1 }"
+            )
+            lines.append(f'Write-Output "{_DONE_PREFIX}{token}:$($__malibuExit)"')
         else:
-            raise ShellCommandTimeoutError("Session creation timed out")
+            lines.append(f'printf "{_DONE_PREFIX}{token}:%s\\n" "$?"')
+
+        return "\n".join(lines) + "\n"
+
+    def _build_cd_command(self, run_dir: str) -> str:
+        if self._is_windows:
+            escaped = run_dir.replace("'", "''")
+            return f"Set-Location -LiteralPath '{escaped}'"
+        return f"cd {shlex.quote(run_dir)}"
+
+    def _write(self, session: _ShellSession, payload: str) -> None:
+        stdin = session.process.stdin
+        if stdin is None or session.process.poll() is not None:
+            raise ShellOperationError(
+                f"Session '{session.name}' is not available for input"
+            )
+        try:
+            stdin.write(payload)
+            stdin.flush()
+        except OSError as exc:
+            raise ShellOperationError(
+                f"Failed to write to session '{session.name}': {exc}"
+            ) from exc
+
+    def _interrupt_process(self, process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        if self._is_windows:
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(process.pid, signal.SIGINT)
+
+    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        if self._is_windows:
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+            try:
+                process.wait(timeout=2)
+                return
+            except subprocess.TimeoutExpired:
+                process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=2)
+                return
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=5)
+
+    def _wait_for_shell_ready(self, timeout: int) -> None:
+        end = time.time() + min(timeout, _MAX_TIMEOUT)
+        while time.time() < end:
+            time.sleep(_POLL_INTERVAL)
+            return
+        raise ShellCommandTimeoutError("Session creation timed out")
+

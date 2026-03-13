@@ -5,11 +5,15 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 LOG_FILE_PATH = Path(
-    os.environ.get("TOOL_SERVER_LOG_FILE", "/app/log/sandbox.log")
+    os.environ.get(
+        "TOOL_SERVER_LOG_FILE",
+        str(Path(tempfile.gettempdir()) / "malibu-tool-server.log"),
+    )
 )
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 

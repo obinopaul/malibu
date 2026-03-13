@@ -1,5 +1,5 @@
 from abc import ABC
-from backend.src.tool_server.integrations.llm.config import LLMConfig
+from malibu.agent.tool_server.integrations.llm.config import LLMConfig
 from openai import AsyncOpenAI
 from typing import Literal
 from pydantic import BaseModel
@@ -118,3 +118,4 @@ class LLMClient(ABC):
             cost = self._calculate_cost(self.model_name, input_tokens, output_tokens)
 
             return LLMResult(content=content, cost=cost)
+

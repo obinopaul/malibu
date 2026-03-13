@@ -79,50 +79,10 @@ class BaseTool(ABC):
         raise NotImplementedError
 
     async def _mcp_wrapper(self, tool_input: dict[str, Any]):
-        """Wraps the tool execution to match with FastMCP Format"""
+        """Legacy MCP wrapper kept only to fail with a clear error."""
 
-        from mcp.types import (
-            ImageContent as MCPImageContent,
-            TextContent as MCPTextContent,
-        )
-        from fastmcp.tools.tool import ToolResult as FastMCPToolResult
-
-        internal_result = await self.execute(tool_input)
-        llm_content = internal_result.llm_content
-
-        mcp_result = []
-
-        if isinstance(llm_content, str):
-            mcp_result.append(
-                MCPTextContent(
-                    type="text",
-                    text=llm_content,
-                )
-            )
-        elif isinstance(llm_content, list):
-            for content in llm_content:
-                if isinstance(content, ImageContent):
-                    mcp_result.append(
-                        MCPImageContent(
-                            type="image",
-                            data=content.data,
-                            mimeType=content.mime_type,
-                        )
-                    )
-                elif isinstance(content, TextContent):
-                    mcp_result.append(
-                        MCPTextContent(
-                            type="text",
-                            text=content.text,
-                        )
-                    )
-
-        return FastMCPToolResult(
-            content=mcp_result,
-            structured_content={
-                "user_display_content": internal_result.user_display_content,
-                "is_error": internal_result.is_error,
-            },
+        raise RuntimeError(
+            "MCP transport wrappers were removed from Malibu's local tool runtime."
         )
 
     def get_tool_params(self) -> ToolParam:

@@ -1,36 +1,27 @@
-"""Shared test fixtures for Malibu test suite."""
-
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Literal
-from unittest.mock import AsyncMock, MagicMock
+import shutil
+import uuid
+from pathlib import Path
 
 import pytest
 
-from malibu.config import Settings
+
+@pytest.fixture(autouse=True)
+def _disable_langsmith(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
 
 
 @pytest.fixture
-def settings() -> Settings:
-    """Return a test Settings instance with defaults overridden."""
-    return Settings(
-        database_url="sqlite+aiosqlite:///test.db",
-        jwt_secret="test-secret-key-for-tests-only",
-        llm_model="openai:gpt-4o-mini",
-        llm_api_key="sk-test-key",
-        allowed_paths=["."],
-        max_file_size=1_000_000,
-        log_level="DEBUG",
-    )
-
-
-@pytest.fixture
-def mock_client() -> MagicMock:
-    """Return a mock ACP Client."""
-    client = MagicMock()
-    client.session_update = AsyncMock()
-    client.request_permission = AsyncMock()
-    client.write_text_file = AsyncMock()
-    client.read_text_file = AsyncMock()
-    return client
+def tmp_path() -> Path:
+    base_dir = Path.cwd() / ".pytest_tmp"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    path = base_dir / f"case-{uuid.uuid4().hex[:8]}"
+    path.mkdir(parents=True, exist_ok=False)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)

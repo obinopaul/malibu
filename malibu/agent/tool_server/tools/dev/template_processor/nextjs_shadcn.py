@@ -1,6 +1,6 @@
 import subprocess
-from backend.src.tool_server.tools.dev.template_processor.base_processor import BaseProcessor
-from backend.src.tool_server.tools.dev.template_processor.registry import WebProcessorRegistry
+from malibu.agent.tool_server.tools.dev.template_processor.base_processor import BaseProcessor
+from malibu.agent.tool_server.tools.dev.template_processor.registry import WebProcessorRegistry
 
 
 def deployment_rule(project_path: str) -> str:
@@ -90,3 +90,4 @@ class NextShadcnProcessor(BaseProcessor):
             raise Exception(
                 f"Failed to install dependencies automatically: {install_result.stderr.decode('utf-8')}. Please fix the error and run `bun install` in the project directory manually"
             )
+

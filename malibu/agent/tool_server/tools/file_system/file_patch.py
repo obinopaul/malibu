@@ -5,8 +5,8 @@ from typing import Callable, Optional, Any
 from pydantic import BaseModel, Field
 
 
-from backend.src.tool_server.core.workspace import FileSystemValidationError, WorkspaceManager
-from backend.src.tool_server.tools.base import (
+from malibu.agent.tool_server.core.workspace import FileSystemValidationError, WorkspaceManager
+from malibu.agent.tool_server.tools.base import (
     BaseTool,
     ToolResult,
     FileEditToolResultContent,
@@ -687,3 +687,4 @@ class ApplyPatchTool(BaseTool):
         }
 
         return await self._mcp_wrapper(tool_input=tool_input)
+

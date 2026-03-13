@@ -2,8 +2,8 @@
 
 from typing import Any
 from pathlib import Path
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ToolConfirmationDetails
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ToolConfirmationDetails
 
 
 # Name

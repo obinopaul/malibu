@@ -1,6 +1,4 @@
 from .base import BaseImageSearchClient
-from .serpapi import SerpAPIImageSearchClient
-from .duckduckgo import DuckDuckGoImageSearchClient
 from .config import ImageSearchConfig
 
 
@@ -17,8 +15,10 @@ def create_image_search_client(settings: ImageSearchConfig) -> BaseImageSearchCl
     serpapi_key = settings.serpapi_api_key
 
     if serpapi_key:
-        print("Using SerpAPI to search for images")
+        from .serpapi import SerpAPIImageSearchClient
+
         return SerpAPIImageSearchClient(api_key=serpapi_key)
 
-    print("Using DuckDuckGo to search for images")
+    from .duckduckgo import DuckDuckGoImageSearchClient
+
     return DuckDuckGoImageSearchClient()

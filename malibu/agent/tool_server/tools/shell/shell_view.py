@@ -1,6 +1,6 @@
 from typing import List, Any
-from backend.src.tool_server.tools.shell.terminal_manager import BaseShellManager
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.tools.shell.terminal_manager import BaseShellManager
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 # Name
 NAME = "BashView"

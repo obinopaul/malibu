@@ -1,9 +1,9 @@
 import os
 
 from typing import Any
-from backend.src.tool_server.tools.dev.template_processor.registry import WebProcessorRegistry
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
-from backend.src.tool_server.core.workspace import WorkspaceManager
+from malibu.agent.tool_server.tools.dev.template_processor.registry import WebProcessorRegistry
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.core.workspace import WorkspaceManager
 
 
 # Name
@@ -157,3 +157,4 @@ class FullStackInitTool(BaseTool):
                 "framework": framework,
             }
         )
+

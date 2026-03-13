@@ -1,8 +1,7 @@
 import json
-import httpx
-from typing import Any, Dict
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
-from backend.src.tool_server.core.tool_server import get_tool_server_url, set_tool_server_url
+from typing import Any
+
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 
 # Name
@@ -25,13 +24,15 @@ INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "query": {"type": "string", "description": "The search query to find information on the web"},
+        "max_results": {
+            "type": "integer",
+            "description": "Optional number of results to return. Defaults to the tool runtime setting.",
+        },
     },
     "required": ["query"],
 }
 
-MAX_RESULTS = 12
-DEFAULT_TIMEOUT = 120
-FAILURE_MESSAGE = "Please try again. If the problem continues, switch to browser tools for manual searching and let the user know that web search is temporarily unavailable."
+DEFAULT_MAX_RESULTS = 12
     
 class WebSearchTool(BaseTool):
     name = NAME
@@ -40,62 +41,34 @@ class WebSearchTool(BaseTool):
     input_schema = INPUT_SCHEMA
     read_only = True
 
-    def __init__(self, credential: Dict, tool_server_url: str | None = None):
-        super().__init__()
-        if tool_server_url:
-            set_tool_server_url(tool_server_url)
-        self.credential = credential
+    def __init__(self, client: Any, max_results: int = DEFAULT_MAX_RESULTS):
+        self.client = client
+        self.max_results = max_results
 
     async def execute(
         self,
         tool_input: dict[str, Any],
     ) -> ToolResult:
-        # Check if credential is set for this tool
-        if not self.credential or not self.credential.get('user_api_key'):
-            return ToolResult(
-                llm_content="Web search requires user authentication. The sandbox credential has not been set. Please set credentials via POST /credential endpoint.",
-                is_error=True,
-            )
-        
         query = tool_input["query"]
-        
-        tool_server_url = get_tool_server_url()
+        max_results = int(tool_input.get("max_results") or self.max_results)
+
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{tool_server_url}/web-search",
-                    json={"query": query, "session_id": self.credential['session_id']},
-                    headers={
-                        "Authorization": f"Bearer {self.credential['user_api_key']}",
-                    },
-                    timeout=DEFAULT_TIMEOUT,
-                )
-                response.raise_for_status()
-            
-        except httpx.TimeoutException:
+            response = await self.client.search(query, max_results=max_results)
+        except Exception as e:
             return ToolResult(
-                llm_content=f"The search engine is taking too long to respond. It might be overloaded. {FAILURE_MESSAGE}",
-                is_error=True,
-            )
-        except httpx.NetworkError:
-            return ToolResult(
-                llm_content=f"The search engine is unreachable (network issue). {FAILURE_MESSAGE}",
-                is_error=True,
-            )
-        except httpx.HTTPStatusError as e:
-            return ToolResult(
-                llm_content=f"The search request failed: {e}. {FAILURE_MESSAGE}",
+                llm_content=f"Web search failed: {e}",
                 is_error=True,
             )
 
-        response_data = response.json()
-        results = response_data.get("results", [])[:MAX_RESULTS]
+        results = response.result[:max_results]
         results_str = json.dumps(results, indent=2)
 
         if len(results) == 0:
             return ToolResult(
-                llm_content=f"The search engine processed your query '{query}' successfully but found no matching results. Try rephrasing with different keywords, broader terms, or check for typos.",
-                user_display_content=results_str, # NOTE: to compatible with the current frontend implementation
+                llm_content=(
+                    f"No results found for '{query}'. Try broader keywords or check for typos."
+                ),
+                user_display_content=results_str,
                 is_error=False,
             )
         
@@ -110,3 +83,4 @@ class WebSearchTool(BaseTool):
                 "query": query,
             }
         )
+

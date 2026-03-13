@@ -8,8 +8,8 @@ BaseTool (for MCP) and LangChain-compatible interfaces.
 import asyncio
 from typing import Any, Optional
 
-from backend.src.tool_server.browser.browser import Browser
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
+from malibu.agent.tool_server.browser.browser import Browser
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
 
 
 class BrowserClickTool(BaseTool):
@@ -134,11 +134,11 @@ def create_langchain_browser_click_tool(browser: Browser):
         A LangChain BaseTool compatible with LangGraph and ReAct agents
         
     Example:
-        >>> from backend.src.tool_server.tools.browser.click import create_langchain_browser_click_tool
+        >>> from malibu.agent.tool_server.tools.browser.click import create_langchain_browser_click_tool
         >>> tool = create_langchain_browser_click_tool(browser)
         >>> agent = create_react_agent(llm, [tool])
     """
-    from backend.src.tool_server.tools.langchain_adapter import LangChainToolAdapter
+    from malibu.agent.tool_server.tools.langchain_adapter import LangChainToolAdapter
     return LangChainToolAdapter.from_base_tool(BrowserClickTool(browser))
 
 

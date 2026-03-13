@@ -2,7 +2,7 @@ import httpx
 import base64
 import json
 from typing import Any
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ImageContent, FileURLContent
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ImageContent, FileURLContent
 
 NAME = "read_remote_image"
 DISPLAY_NAME = "Read Remote Image"

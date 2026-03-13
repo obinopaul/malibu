@@ -18,5 +18,5 @@ class SessionMeta:
     session_id: str
     cwd: str
     mode: str = "accept_edits"
-    model: str = "openai:gpt-4o"
+    model: str = "openai:gpt-5.4"
     todos: list[dict[str, Any]] = field(default_factory=list)

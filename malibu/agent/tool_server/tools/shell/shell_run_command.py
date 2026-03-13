@@ -1,7 +1,7 @@
 from typing import Any
-from backend.src.tool_server.tools.shell.terminal_manager import BaseShellManager, ShellCommandTimeoutError, ShellBusyError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ToolConfirmationDetails
-from backend.src.tool_server.core.workspace import WorkspaceManager
+from malibu.agent.tool_server.tools.shell.terminal_manager import BaseShellManager, ShellCommandTimeoutError, ShellBusyError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ToolConfirmationDetails
+from malibu.agent.tool_server.core.workspace import WorkspaceManager
 
 
 # Constants

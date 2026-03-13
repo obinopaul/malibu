@@ -12,8 +12,8 @@ import platform
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 
 # Configure logging
@@ -341,7 +341,7 @@ class LspTool(BaseTool):
         """
         self.workspace_manager = workspace_manager
         # Use the singleton server manager for lifecycle management
-        from backend.src.tool_server.tools.file_system.lsp_manager import get_lsp_manager
+        from malibu.agent.tool_server.tools.file_system.lsp_manager import get_lsp_manager
         self._manager = get_lsp_manager()
     
     async def _execute_lsp_operation(
@@ -372,7 +372,7 @@ class LspTool(BaseTool):
         Returns:
             Results from the LSP operation
         """
-        from backend.src.tool_server.tools.file_system.lsp_manager import LspManagerError
+        from malibu.agent.tool_server.tools.file_system.lsp_manager import LspManagerError
         
         workspace_str = str(workspace_root)
         lsp = None
@@ -728,3 +728,4 @@ class LspTool(BaseTool):
         if timeout is not None:
             tool_input["timeout"] = timeout
         return await self._mcp_wrapper(tool_input=tool_input)
+

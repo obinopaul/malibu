@@ -2,8 +2,8 @@ import asyncio
 
 from typing import Any
 from playwright.async_api import TimeoutError
-from backend.src.tool_server.browser.browser import Browser
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
+from malibu.agent.tool_server.browser.browser import Browser
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
 
 
 class BrowserNavigationTool(BaseTool):

@@ -1,12 +1,13 @@
 """Content search tool using regular expressions."""
 
-import subprocess
 import re
+import shutil
+import subprocess
 
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 
 # Constants
@@ -41,7 +42,15 @@ INPUT_SCHEMA = {
         "include": {
             "type": "string",
             "description": "A glob pattern to filter which files are searched (e.g., '*.js', '*.{ts,tsx}', 'src/**'). If omitted, searches all files"
-        }
+        },
+        "glob_pattern": {
+            "type": "string",
+            "description": "Alias for include. Preserved for Malibu compatibility."
+        },
+        "max_results": {
+            "type": "integer",
+            "description": f"Maximum number of matches to return. Defaults to {MAX_GLOB_RESULTS}."
+        },
     },
     "required": ["pattern"]
 }
@@ -95,6 +104,8 @@ def _run_ripgrep(pattern: str, search_path: Path, include: Optional[str] = None)
         
     except subprocess.TimeoutExpired:
         raise GrepToolError("Search operation timed out")
+    except FileNotFoundError as e:
+        raise GrepToolError(f"Ripgrep executable not found: {e}")
     except subprocess.CalledProcessError as e:
         raise GrepToolError(f"Ripgrep command failed: {e.stderr.strip()}")
 
@@ -118,7 +129,14 @@ class GrepTool(BaseTool):
     def __init__(self, workspace_manager: WorkspaceManager):
         self.workspace_manager = workspace_manager
 
-    def _format_results(self, matches: List[Dict[str, str]], pattern: str, search_path: Path, include: Optional[str] = None) -> str:
+    def _format_results(
+        self,
+        matches: List[Dict[str, str]],
+        pattern: str,
+        search_path: Path,
+        include: Optional[str] = None,
+        max_results: int = MAX_GLOB_RESULTS,
+    ) -> str:
         """Format search results for display."""
         if not matches:
             search_desc = f"pattern \"{pattern}\" in {search_path}"
@@ -139,15 +157,15 @@ class GrepTool(BaseTool):
         
         # Limit total results
         total_matches = len(matches)
-        if total_matches > MAX_GLOB_RESULTS:
+        if total_matches > max_results:
             # Truncate results
             truncated_matches = []
             for file_path in sorted_files:
                 for match in files_with_matches[file_path]:
                     truncated_matches.append(match)
-                    if len(truncated_matches) >= MAX_GLOB_RESULTS:
+                    if len(truncated_matches) >= max_results:
                         break
-                if len(truncated_matches) >= MAX_GLOB_RESULTS:
+                if len(truncated_matches) >= max_results:
                     break
             matches = truncated_matches
             
@@ -176,9 +194,9 @@ class GrepTool(BaseTool):
                 result_lines.append(f"L{match['line_number']}: {line_content}")
             result_lines.append("---")
         
-        if total_matches > MAX_GLOB_RESULTS:
-            result_lines.append(f"Note: Results limited to {MAX_GLOB_RESULTS} matches. Total matches found: {total_matches}")
-        
+        if total_matches > max_results:
+            result_lines.append(f"Note: Results limited to {max_results} matches. Total matches found: {total_matches}")
+
         return '\n'.join(result_lines)
 
     async def execute(
@@ -190,15 +208,21 @@ class GrepTool(BaseTool):
         """
         pattern = tool_input.get("pattern")
         path = tool_input.get("path")
-        include = tool_input.get("include")
-        
+        include = tool_input.get("include") or tool_input.get("glob_pattern")
+        max_results = int(tool_input.get("max_results") or MAX_GLOB_RESULTS)
+
         # Validate the regex pattern
         if not _validate_regex_pattern(pattern):
             return ToolResult(
                 llm_content=f"ERROR: Invalid regular expression pattern: {pattern}",
                 is_error=True
             )
-        
+        if max_results < 1:
+            return ToolResult(
+                llm_content="ERROR: max_results must be a positive integer",
+                is_error=True
+            )
+
         try:
             # Determine search directory using Path
             if path is None:
@@ -206,11 +230,36 @@ class GrepTool(BaseTool):
             else:
                 self.workspace_manager.validate_existing_directory_path(path)
                 search_dir = Path(path).resolve()
-            
-            matches = _run_ripgrep(pattern, search_dir, include)
+
+            if shutil.which("rg"):
+                matches = _run_ripgrep(pattern, search_dir, include)
+            else:
+                matches = []
+                for candidate in search_dir.rglob(include or "*"):
+                    if not candidate.is_file():
+                        continue
+                    try:
+                        for index, content in enumerate(
+                            candidate.read_text(encoding="utf-8").splitlines(),
+                            start=1,
+                        ):
+                            if re.search(pattern, content):
+                                matches.append({
+                                    "file_path": str(candidate),
+                                    "line_number": str(index),
+                                    "content": content,
+                                })
+                    except (OSError, UnicodeDecodeError):
+                        continue
 
             # Format and return results
-            result_content = self._format_results(matches, pattern, search_dir, include)
+            result_content = self._format_results(
+                matches,
+                pattern,
+                search_dir,
+                include,
+                max_results=max_results,
+            )
             return ToolResult(
                 llm_content=result_content,
                 is_error=False

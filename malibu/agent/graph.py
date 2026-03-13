@@ -10,22 +10,25 @@ Supports optional subagent delegation and skill tool injection.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends.local import LocalShellBackend
+from deepagents.backends.filesystem import FilesystemBackend
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from malibu.agent.prompts import build_system_prompt
-from malibu.agent.tools import ALL_TOOLS
+from malibu.agent.tools import build_default_tools
 from malibu.config import Settings
 from malibu.agent.middleware.channel_context import ChannelContextMiddleware
 from malibu.agent.middleware.guardrails import ContentFilterMiddleware, PIIMiddleware
 from malibu.agent.middleware.permissions import build_tool_permission_middleware
 from malibu.agent.middleware.rate_limit import RateLimitMiddleware
 from malibu.agent.middleware.stack import build_middleware_stack, load_local_context
+
+_DEFAULT_PII_TYPES = ("email", "credit_card", "ip", "mac_address", "url")
 
 
 def build_agent(
@@ -107,7 +110,7 @@ def build_agent(
         middleware.append(ContentFilterMiddleware(banned_keywords=banned_keywords))
 
     # PII redaction
-    middleware.append(PIIMiddleware())
+    middleware.extend(PIIMiddleware(pii_type=pii_type) for pii_type in _DEFAULT_PII_TYPES)
 
     # HITL + hooks + logging stack
     middleware.extend(build_middleware_stack(mode, hook_manager=hook_manager))
@@ -119,13 +122,19 @@ def build_agent(
     if checkpointer is None:
         checkpointer = MemorySaver()
 
-    # Merge tool lists
-    tools = list(ALL_TOOLS)
+    # Build a fresh tool bundle scoped to this session cwd.
+    tools = list(
+        build_default_tools(
+            settings=settings,
+            cwd=cwd,
+        )
+    )
     if extra_tools:
         tools.extend(extra_tools)
 
-    # Create LocalShellBackend so Deep Agents provides filesystem tools natively
-    backend = LocalShellBackend()
+    # Deep Agents' local shell backend is not available in the installed runtime.
+    # Malibu now provides shell and filesystem access through native LangChain tools.
+    backend = FilesystemBackend(root_dir=Path(cwd))
 
     # Load Subagents using our new module
     from malibu.agent.subagents.loader import list_subagents
@@ -150,7 +159,8 @@ def build_agent(
     from malibu.agent.middleware.local_context import LocalContextMiddleware
     from malibu.agent.middleware.ask_user import AskUserMiddleware
     
-    middleware.append(LocalContextMiddleware(backend=backend))
+    if hasattr(backend, "execute"):
+        middleware.append(LocalContextMiddleware(backend=backend))
     middleware.append(AskUserMiddleware())
 
     agent_kwargs: dict[str, Any] = {

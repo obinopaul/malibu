@@ -55,6 +55,32 @@ class Settings(BaseSettings):
     tui_unicode: bool = True
     tui_show_welcome: bool = True
 
+    # ── Tool Providers ─────────────────────────────────────────────
+    web_search_firecrawl_api_key: str | None = None
+    web_search_serpapi_api_key: str | None = None
+    web_search_jina_api_key: str | None = None
+    web_search_tavily_api_key: str | None = None
+    web_search_max_results: int = 5
+
+    web_visit_firecrawl_api_key: str | None = None
+    web_visit_gemini_api_key: str | None = None
+    web_visit_jina_api_key: str | None = None
+    web_visit_tavily_api_key: str | None = None
+    web_visit_max_output_length: int = 40_000
+
+    image_search_serpapi_api_key: str | None = None
+    image_search_max_results: int = 5
+
+    image_generate_gcp_project_id: str | None = None
+    image_generate_gcp_location: str | None = None
+    image_generate_gcs_output_bucket: str | None = None
+    image_generate_google_ai_studio_api_key: str | None = None
+
+    video_generate_gcp_project_id: str | None = None
+    video_generate_gcp_location: str | None = None
+    video_generate_gcs_output_bucket: str | None = None
+    video_generate_google_ai_studio_api_key: str | None = None
+
     # ── Skills ─────────────────────────────────────────────────────
     skills_paths: list[str] = Field(default_factory=list)
     skills_enabled: bool = True

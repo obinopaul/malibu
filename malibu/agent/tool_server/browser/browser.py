@@ -28,24 +28,24 @@ from tenacity import (
 from typing_extensions import TypedDict  # to account for older python versions
 
 # Import detector class
-from backend.src.tool_server.browser.detector import Detector
-from backend.src.tool_server.browser.models import (
+from malibu.agent.tool_server.browser.detector import Detector
+from malibu.agent.tool_server.browser.models import (
     BrowserError,
     BrowserState,
     InteractiveElementsData,
     TabInfo,
 )
-from backend.src.tool_server.browser.utils import (
+from malibu.agent.tool_server.browser.utils import (
     filter_elements,
     put_highlight_elements_on_screenshot,
     scale_b64_image,
 )
-from backend.src.tool_server.browser.utils import is_pdf_url
+from malibu.agent.tool_server.browser.utils import is_pdf_url
 
 logger = logging.getLogger(__name__)
 
 INTERACTIVE_ELEMENTS_JS_CODE = resources.read_text(
-    "backend.src.tool_server.browser", "findVisibleInteractiveElements.js"
+    "malibu.agent.tool_server.browser", "findVisibleInteractiveElements.js"
 )
 
 
@@ -571,3 +571,4 @@ class Browser:
 
         state = await self.update_state()
         return state
+

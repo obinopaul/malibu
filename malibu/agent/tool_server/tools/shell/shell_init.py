@@ -1,7 +1,7 @@
 from typing import Optional, Any
-from backend.src.tool_server.tools.shell.terminal_manager import BaseShellManager, ShellInvalidSessionNameError, TmuxSessionExists
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.tools.shell.terminal_manager import BaseShellManager, ShellInvalidSessionNameError, TmuxSessionExists
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 # Name
 NAME = "BashInit"

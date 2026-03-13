@@ -2,8 +2,8 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 # Name
 NAME = "str_replace_based_edit_tool"

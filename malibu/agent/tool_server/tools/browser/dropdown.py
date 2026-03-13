@@ -1,8 +1,8 @@
 import json
 
 from typing import Any
-from backend.src.tool_server.browser.browser import Browser
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
+from malibu.agent.tool_server.browser.browser import Browser
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
 
 
 class BrowserGetSelectOptionsTool(BaseTool):

@@ -5,7 +5,7 @@ Computer vision detector module.
 from abc import ABC, abstractmethod
 from typing import List
 
-from backend.src.tool_server.browser.models import InteractiveElement
+from malibu.agent.tool_server.browser.models import InteractiveElement
 
 
 class Detector(ABC):
@@ -27,3 +27,4 @@ class Detector(ABC):
             List of detected InteractiveElement objects.
         """
         pass
+

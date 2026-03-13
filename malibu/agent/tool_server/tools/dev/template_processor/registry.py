@@ -1,6 +1,6 @@
 from typing import Dict, Type
 
-from backend.src.tool_server.tools.dev.template_processor.base_processor import BaseProcessor
+from malibu.agent.tool_server.tools.dev.template_processor.base_processor import BaseProcessor
 
 
 class WebProcessorRegistry:
@@ -38,3 +38,4 @@ class WebProcessorRegistry:
     @classmethod
     def list_frameworks(cls) -> list[str]:
         return list(cls._registry.keys())
+

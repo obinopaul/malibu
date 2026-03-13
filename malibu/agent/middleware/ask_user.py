@@ -15,7 +15,6 @@ from langchain.agents.middleware.types import (
     ContextT,
     ModelRequest,
     ModelResponse,
-    ResponseT,
 )
 from langchain.tools import InjectedToolCallId
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
@@ -277,7 +276,7 @@ def _parse_answers(
     )
 
 
-class AskUserMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
+class AskUserMiddleware(AgentMiddleware[Any, ContextT]):
     """Middleware that provides an ask_user tool for interactive questioning.
 
     This middleware adds an `ask_user` tool that allows agents to ask the user
@@ -331,9 +330,9 @@ class AskUserMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
 
     def wrap_model_call(
         self,
-        request: ModelRequest[ContextT],
-        handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
-    ) -> ModelResponse[ResponseT] | AIMessage:
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse | AIMessage:
         """Inject the ask_user system prompt.
 
         Returns:
@@ -353,11 +352,9 @@ class AskUserMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
 
     async def awrap_model_call(
         self,
-        request: ModelRequest[ContextT],
-        handler: Callable[
-            [ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]
-        ],
-    ) -> ModelResponse[ResponseT] | AIMessage:
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse | AIMessage:
         """Inject the ask_user system prompt (async).
 
         Returns:

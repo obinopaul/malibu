@@ -3,7 +3,7 @@ from typing import List
 from ..logger import get_logger
 from . import utils
 from .base import BaseWebVisitClient, WebVisitResult, WebVisitError
-from backend.src.tool_server.integrations.llm.client import LLMClient
+from malibu.agent.tool_server.integrations.llm.client import LLMClient
 
 logger = get_logger("tool_server.web_visit.service")
 
@@ -67,3 +67,4 @@ class WebVisitService:
 
     async def researcher_visit(self, urls: List[str], query: str) -> WebVisitResult:
         return await self.researcher_visit_client.batch_extract_compress(urls, query)
+

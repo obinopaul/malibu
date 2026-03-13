@@ -1,9 +1,9 @@
 import asyncio
 
 from typing import Any
-from backend.src.tool_server.browser.browser import Browser
-from backend.src.tool_server.browser.utils import is_pdf_url
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
+from malibu.agent.tool_server.browser.browser import Browser
+from malibu.agent.tool_server.browser.utils import is_pdf_url
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ImageContent, TextContent
 
 
 class BrowserScrollDownTool(BaseTool):

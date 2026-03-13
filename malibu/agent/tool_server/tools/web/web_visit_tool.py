@@ -1,7 +1,6 @@
-import httpx
-from typing import Any, Dict
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
-from backend.src.tool_server.core.tool_server import get_tool_server_url, set_tool_server_url
+from typing import Any
+
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 # Name
 NAME = "web_visit"
@@ -45,75 +44,31 @@ class WebVisitTool(BaseTool):
     input_schema = INPUT_SCHEMA
     read_only = True
 
-    def __init__(self, credential: Dict, tool_server_url: str | None = None):
-        super().__init__()
-        if tool_server_url:
-            set_tool_server_url(tool_server_url)
-        self.credential = credential
+    def __init__(self, service: Any):
+        self.service = service
         
     async def execute(
         self,
         tool_input: dict[str, Any],
     ) -> ToolResult:
-        # Check if credential is set for this tool
-        if not self.credential or not self.credential.get('user_api_key'):
-            return ToolResult(
-                llm_content="Web visit requires user authentication. The sandbox credential has not been set. Please set credentials via POST /credential endpoint.",
-                is_error=True,
-            )
-        
         url = tool_input["url"]
         prompt = tool_input.get("prompt", None)
         if "arxiv.org/abs" in url:
             url = "https://arxiv.org/html/" + url.split("/")[-1]
 
-        request_data = {
-            "url": url,
-            "session_id": self.credential['session_id'],
-        }
-        if prompt:
-            request_data["prompt"] = prompt
-
-        tool_server_url = get_tool_server_url()
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{tool_server_url}/web-visit",
-                    json=request_data,
-                    headers={
-                        "Authorization": f"Bearer {self.credential['user_api_key']}",
-                    },
-                    timeout=DEFAULT_TIMEOUT
-                )
-                response.raise_for_status()
-        except httpx.TimeoutException:
-            if not prompt:
-                return ToolResult(
-                    llm_content=f"The webpage visit engine is taking too long to load. {FAILURE_MESSAGE}",
-                    error=True,
-                )
-            else:
-                return ToolResult(
-                    llm_content=f"The webpage visit engine is taking too long to process prompt, try again without using `prompt` to get the raw content",
-                    error=True,
-                )
-        except httpx.NetworkError:
+            response = await self.service.visit(url, prompt)
+        except Exception as e:
             return ToolResult(
-                llm_content=f"The webpage visit engine is unreachable (network issue). {FAILURE_MESSAGE}",
-                error=True,
-            )
-        except httpx.HTTPStatusError as e:
-            return ToolResult(
-                llm_content=f"The visit request failed: {e}. {FAILURE_MESSAGE}",
-                error=True,
+                llm_content=f"Web visit failed: {e}",
+                is_error=True,
             )
 
-        response_data = response.json()
-        content = response_data.get("content", None)
+        content = response.content
         if content is None or (isinstance(content, str) and not content.strip()):
             return ToolResult(
                 llm_content="The webpage content is empty or un-extractable (e.g. login, paywall, etc.). Please try again with a different URL or use browser tools to visit manually.",
-                error=True,
+                is_error=True,
             )
 
         return ToolResult(
@@ -128,3 +83,4 @@ class WebVisitTool(BaseTool):
                 "prompt": prompt,
             }
         )
+

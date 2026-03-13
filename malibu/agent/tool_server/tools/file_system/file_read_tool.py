@@ -6,9 +6,9 @@ from PIL import Image
 
 from pathlib import Path
 from typing import Optional, Any
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, ImageContent
-from backend.src.tool_server.tools.file_system.utils import encode_image
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, ImageContent
+from malibu.agent.tool_server.tools.file_system.utils import encode_image
 
 
 # Constants
@@ -42,6 +42,10 @@ INPUT_SCHEMA = {
         "limit": {
             "type": "integer",
             "description": f"Optional number of lines to read from the text file. Use for large files to limit output. Must be 1 or greater. If omitted, reads up to {MAX_FILE_READ_LINES} lines by default"
+        },
+        "line": {
+            "type": "integer",
+            "description": "Optional 1-based line number alias for offset. Preserved for Malibu compatibility."
         },
         "offset": {
             "type": "integer",
@@ -279,6 +283,8 @@ class FileReadTool(BaseTool):
         file_path = tool_input.get("file_path")
         limit = tool_input.get("limit")
         offset = tool_input.get("offset")
+        if offset is None:
+            offset = tool_input.get("line")
 
         # Validate parameters
         if offset is not None and offset < 1:

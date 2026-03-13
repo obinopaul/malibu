@@ -1,9 +1,8 @@
 import json
 
-import httpx
-from typing import Any, List, Dict
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
-from backend.src.tool_server.core.tool_server import get_tool_server_url, set_tool_server_url
+from typing import Any, List
+
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 
 # Name
@@ -26,12 +25,15 @@ INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "queries": {"type": "array", "items": {"type": "string"}, "description": "The search queries to find information on the web"},
+        "max_results": {
+            "type": "integer",
+            "description": "Optional number of results to return per query.",
+        },
     },
     "required": ["queries"],
 }
 
-DEFAULT_TIMEOUT = 120
-FAILURE_MESSAGE = "Please try again. If the problem continues, switch to browser tools for manual searching and let the user know that web search is temporarily unavailable."
+DEFAULT_MAX_RESULTS = 12
     
 class WebBatchSearchTool(BaseTool):
     name = NAME
@@ -40,56 +42,29 @@ class WebBatchSearchTool(BaseTool):
     input_schema = INPUT_SCHEMA
     read_only = True
 
-    def __init__(self, credential: Dict, tool_server_url: str | None = None):
-        super().__init__()
-        if tool_server_url:
-            set_tool_server_url(tool_server_url)
-        self.credential = credential
+    def __init__(self, client: Any, max_results: int = DEFAULT_MAX_RESULTS):
+        self.client = client
+        self.max_results = max_results
         
     async def execute(
         self,
         tool_input: dict[str, Any],
     ) -> ToolResult:
-        # Check if credential is set for this tool
-        if not self.credential or not self.credential.get('user_api_key'):
-            return ToolResult(
-                llm_content="Web batch search requires user authentication. The sandbox credential has not been set. Please set credentials via POST /credential endpoint.",
-                is_error=True,
-            )
-        
         queries = tool_input["queries"]
-        
-        tool_server_url = get_tool_server_url()
+        max_results = int(tool_input.get("max_results") or self.max_results)
+
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                response = await client.post(
-                    f"{tool_server_url}/v2/web-search",
-                    json={"queries": queries, "session_id": self.credential['session_id']},
-                    headers={
-                        "Authorization": f"Bearer {self.credential['user_api_key']}",
-                    },
-                    timeout=DEFAULT_TIMEOUT,
-                )
-                response.raise_for_status()
-            
-        except httpx.TimeoutException:
-            return ToolResult(
-                llm_content=f"The search engine is taking too long to respond. It might be overloaded. {FAILURE_MESSAGE}",
-                is_error=True,
+            search_results = await self.client.batch_search(
+                queries,
+                max_results=max_results,
             )
-        except httpx.NetworkError:
+        except Exception as e:
             return ToolResult(
-                llm_content=f"The search engine is unreachable (network issue). {FAILURE_MESSAGE}",
-                is_error=True,
-            )
-        except httpx.HTTPStatusError as e:
-            return ToolResult(
-                llm_content=f"The search request failed: {e}. {FAILURE_MESSAGE}",
+                llm_content=f"Web batch search failed: {e}",
                 is_error=True,
             )
 
-        response_data = response.json()
-        results = response_data.get("results", [])
+        results = [result.result[:max_results] for result in search_results]
         result_str = ""
         for i, query in enumerate(queries):
             result_str += f"Query: {query}\n"
@@ -111,7 +86,7 @@ class WebBatchSearchTool(BaseTool):
         user_display_results =[]
         for result in results:
             user_display_results.extend(result)
-        
+
         return ToolResult(
             llm_content=result_str,
             user_display_content=json.dumps(user_display_results, indent=2),
@@ -124,3 +99,4 @@ class WebBatchSearchTool(BaseTool):
                 "queries": queries,
             }
         )
+

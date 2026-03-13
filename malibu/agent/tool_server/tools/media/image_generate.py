@@ -1,10 +1,12 @@
 import httpx
 
-from typing import Any, Dict
+from typing import Any
 from pathlib import Path
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, FileURLContent
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.core.tool_server import get_tool_server_url, set_tool_server_url
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, FileURLContent
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.integrations.image_generation.base import (
+    ImageGenerationError,
+)
 
 
 # Name
@@ -78,26 +80,15 @@ class ImageGenerateTool(BaseTool):
     def __init__(
         self,
         workspace_manager: WorkspaceManager,
-        credential: Dict,
-        tool_server_url: str | None = None,
+        generation_client: Any,
     ):
-        super().__init__()
-        if tool_server_url:
-            set_tool_server_url(tool_server_url)
         self.workspace_manager = workspace_manager
-        self.credential = credential
+        self.generation_client = generation_client
 
     async def execute(
         self,
         tool_input: dict[str, Any],
     ) -> ToolResult:
-        # Check if credential is set for this tool
-        if not self.credential or not self.credential.get('user_api_key'):
-            return ToolResult(
-                llm_content="Image generation requires user authentication. The sandbox credential has not been set. Please set credentials via POST /credential endpoint.",
-                is_error=True,
-            )
-        
         output_path = tool_input["output_path"]
         
         # Validate output path is absolute and within workspace
@@ -118,29 +109,26 @@ class ImageGenerateTool(BaseTool):
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # generate the image
-        tool_server_url = get_tool_server_url()
-        async with httpx.AsyncClient() as client:
-            payload = {
-                "prompt": tool_input["prompt"],
-                "aspect_ratio": tool_input["aspect_ratio"],
-                "session_id": self.credential['session_id'],
-            }
-            response = await client.post(
-                f"{tool_server_url}/image-generation",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.credential['user_api_key']}",
-                },
-                timeout=DEFAULT_TIMEOUT,
+        try:
+            response = await self.generation_client.generate_image(
+                prompt=tool_input["prompt"],
+                aspect_ratio=tool_input.get("aspect_ratio", "1:1"),
             )
-            response.raise_for_status()
-            response_data = response.json()
+        except ImageGenerationError as e:
+            return ToolResult(
+                llm_content=f"Error: {e}",
+                is_error=True,
+            )
+        except Exception as e:
+            return ToolResult(
+                llm_content=f"Error: image generation failed: {e}",
+                is_error=True,
+            )
 
-        image_url = response_data.get("url")
-        image_mime_type = response_data.get("mime_type") or "image/png"
-        image_size = response_data.get("size") or 0
-        search_results = response_data.get("search_results") or []
+        image_url = response.url
+        image_mime_type = response.mime_type or "image/png"
+        image_size = response.size or 0
+        search_results = response.search_results or []
 
         if not image_url:
             if search_results:
@@ -161,12 +149,17 @@ class ImageGenerateTool(BaseTool):
             )
 
         # download the image
-        async with httpx.AsyncClient() as download_client:
-            download_response = await download_client.get(image_url)
-            download_response.raise_for_status()
-            
-            with open(output_path, "wb") as f:
-                f.write(download_response.content)
+        try:
+            async with httpx.AsyncClient() as download_client:
+                download_response = await download_client.get(image_url)
+                download_response.raise_for_status()
+                with open(output_path, "wb") as f:
+                    f.write(download_response.content)
+        except httpx.HTTPError as e:
+            return ToolResult(
+                llm_content=f"Error: failed to download generated image: {e}",
+                is_error=True,
+            )
 
         return ToolResult(
             llm_content=f"Image generated and saved to {output_path}",
@@ -217,3 +210,4 @@ class ImageGenerateTool(BaseTool):
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text("\n".join(lines), encoding="utf-8")
         return summary_path
+

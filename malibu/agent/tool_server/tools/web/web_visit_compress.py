@@ -1,7 +1,6 @@
-import httpx
-from typing import Any, List, Dict
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
-from backend.src.tool_server.core.tool_server import get_tool_server_url, set_tool_server_url
+from typing import Any, List
+
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 
 # Name
@@ -40,23 +39,13 @@ class WebVisitCompressTool(BaseTool):
     input_schema = INPUT_SCHEMA
     read_only = True
 
-    def __init__(self, credential: Dict, tool_server_url: str | None = None):
-        super().__init__()
-        if tool_server_url:
-            set_tool_server_url(tool_server_url)
-        self.credential = credential
+    def __init__(self, service: Any):
+        self.service = service
 
     async def execute(
         self,
         tool_input: dict[str, Any],
     ) -> ToolResult:
-        # Check if credential is set for this tool
-        if not self.credential or not self.credential.get('user_api_key'):
-            return ToolResult(
-                llm_content="Web visit compress requires user authentication. The sandbox credential has not been set. Please set credentials via POST /credential endpoint.",
-                is_error=True,
-            )
-        
         urls = tool_input["urls"]
         query = tool_input["query"]
         process_urls = []
@@ -65,34 +54,15 @@ class WebVisitCompressTool(BaseTool):
                 url = "https://arxiv.org/html/" + url.split("/")[-1]
             process_urls.append(url)
 
-        tool_server_url = get_tool_server_url()
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{tool_server_url}/researcher-web-visit",
-                    json={"urls": process_urls, "query": query, "session_id": self.credential['session_id']},
-                    headers={
-                        "Authorization": f"Bearer {self.credential['user_api_key']}",
-                    },
-                    timeout=DEFAULT_TIMEOUT,
-                )
-                response.raise_for_status()
-                response_data = response.json()
+            response = await self.service.researcher_visit(process_urls, query)
         except Exception as e:
             return ToolResult(
-                llm_content="",
-                user_display_content=str(e),
+                llm_content=f"Web visit compression failed: {e}",
                 is_error=True,
             )
 
-        if not response_data["success"]:
-            return ToolResult(
-                llm_content="",
-                user_display_content=response_data["error"],
-                is_error=True,
-            )
-
-        content = response_data["content"]
+        content = response.content
 
         return ToolResult(
             llm_content=content,
@@ -107,3 +77,4 @@ class WebVisitCompressTool(BaseTool):
                 "query": query,
             }
         )
+

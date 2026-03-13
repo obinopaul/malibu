@@ -7,7 +7,7 @@ from typing import List
 from urllib.parse import urlparse
 from PIL import Image, ImageDraw, ImageFont
 
-from backend.src.tool_server.browser.models import InteractiveElement, Rect
+from malibu.agent.tool_server.browser.models import InteractiveElement, Rect
 
 logger = logging.getLogger(__name__)
 
@@ -429,3 +429,4 @@ def is_pdf_url(url: str, timeout: float = 5.0) -> bool:
     except requests.RequestException:
         # Log or handle as needed in real prod code
         return False
+

@@ -2,11 +2,13 @@ import base64
 import os
 import httpx
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
-from backend.src.tool_server.tools.base import BaseTool, ToolResult, FileURLContent
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.core.tool_server import get_tool_server_url, set_tool_server_url
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult, FileURLContent
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.integrations.video_generation.base import (
+    VideoGenerationResult,
+)
 
 
 _EXTENSION_TO_MIMETYPE = {
@@ -74,26 +76,15 @@ NOTE:
     def __init__(
         self,
         workspace_manager: WorkspaceManager,
-        credential: Dict,
-        tool_server_url: str | None = None,
+        generation_client: Any,
     ):
-        super().__init__()
-        if tool_server_url:
-            set_tool_server_url(tool_server_url)
         self.workspace_manager = workspace_manager
-        self.credential = credential
+        self.generation_client = generation_client
         
     async def execute(
         self,
         tool_input: dict[str, Any],
     ) -> ToolResult:
-        # Check if credential is set for this tool
-        if not self.credential or not self.credential.get('user_api_key'):
-            return ToolResult(
-                llm_content="Video generation requires user authentication. The sandbox credential has not been set. Please set credentials via POST /credential endpoint.",
-                is_error=True,
-            )
-        
         prompt = tool_input["prompt"]
         output_path = tool_input["output_path"]
         aspect_ratio = tool_input.get("aspect_ratio", "16:9")
@@ -115,12 +106,8 @@ NOTE:
         if duration_seconds < 5 or duration_seconds > 30:
             return ToolResult(llm_content=f"Error: duration_seconds: `{duration_seconds}` must be between 5 and 30", is_error=True)
 
-        payload = {
-            "prompt": prompt,
-            "aspect_ratio": aspect_ratio,
-            "duration_seconds": duration_seconds,
-            "session_id": self.credential['session_id'],
-        }
+        image_base64 = None
+        image_mime_type = None
 
         if input_image_path:
             # Validate input image path is absolute and within workspace
@@ -138,27 +125,25 @@ NOTE:
                 image_mime_type = _EXTENSION_TO_MIMETYPE.get(image_extension)
                 if not image_mime_type:
                     return ToolResult(llm_content=f"Error: Unsupported image format: {image_extension}. Supported formats: {', '.join(_EXTENSION_TO_MIMETYPE.keys())}", is_error=True)
-                payload["image_base64"] = image_base64
-                payload["image_mime_type"] = image_mime_type
-        
-        # generate the video
-        tool_server_url = get_tool_server_url()
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{tool_server_url}/video-generation",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.credential['user_api_key']}",
-                },
-                timeout=DEFAULT_TIMEOUT,
+
+        try:
+            response: VideoGenerationResult = await self.generation_client.generate_video(
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                duration_seconds=duration_seconds,
+                image_base64=image_base64,
+                image_mime_type=image_mime_type,
             )
-            response.raise_for_status()
-            response_data = response.json()
+        except Exception as e:
+            return ToolResult(
+                llm_content=f"Error: video generation failed: {e}",
+                is_error=True,
+            )
         
-        video_url = response_data.get("url")
-        video_mime_type = response_data.get("mime_type") or "video/mp4"
-        video_size = response_data.get("size") or 0
-        search_results = response_data.get("search_results") or []
+        video_url = response.url
+        video_mime_type = response.mime_type or "video/mp4"
+        video_size = response.size or 0
+        search_results = response.search_results or []
 
         if not video_url or (video_mime_type and not video_mime_type.startswith("video/")):
             if search_results:
@@ -180,12 +165,18 @@ NOTE:
             )
 
         # download the video
-        async with httpx.AsyncClient() as download_client:
-            download_response = await download_client.get(video_url)
-            download_response.raise_for_status()
+        try:
+            async with httpx.AsyncClient() as download_client:
+                download_response = await download_client.get(video_url)
+                download_response.raise_for_status()
 
-            with open(output_path, "wb") as f:
-                f.write(download_response.content)
+                with open(output_path, "wb") as f:
+                    f.write(download_response.content)
+        except httpx.HTTPError as e:
+            return ToolResult(
+                llm_content=f"Error: failed to download generated video: {e}",
+                is_error=True,
+            )
 
         user_display_content = None
         if video_url:
@@ -250,3 +241,4 @@ NOTE:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text("\n".join(lines), encoding="utf-8")
         return summary_path
+

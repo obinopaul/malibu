@@ -4,8 +4,8 @@ import subprocess
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from backend.src.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
-from backend.src.tool_server.tools.base import BaseTool, ToolResult
+from malibu.agent.tool_server.core.workspace import WorkspaceManager, FileSystemValidationError
+from malibu.agent.tool_server.tools.base import BaseTool, ToolResult
 
 
 # Constants
