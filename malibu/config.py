@@ -5,12 +5,46 @@ All settings can be overridden via environment variables or a .env file.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _resolve_model_parts(model_str: str) -> tuple[str, str]:
+    if ":" in model_str:
+        provider, model_name = model_str.split(":", 1)
+    else:
+        provider, model_name = "openai", model_str
+    return provider.lower(), model_name
+
+
+@lru_cache(maxsize=32)
+def _create_cached_llm(
+    provider: str,
+    model_name: str,
+    api_key: str,
+    base_url: str | None,
+) -> BaseChatModel:
+    if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
+        kwargs: dict[str, str | int] = {"model": model_name, "max_tokens": 8192}
+        if api_key:
+            kwargs["api_key"] = api_key
+        return ChatAnthropic(**kwargs)
+
+    from langchain_openai import ChatOpenAI
+
+    kwargs: dict[str, str] = {"model": model_name}
+    if api_key:
+        kwargs["api_key"] = api_key
+    if base_url:
+        kwargs["base_url"] = base_url
+    return ChatOpenAI(**kwargs)
 
 
 class Settings(BaseSettings):
@@ -93,6 +127,11 @@ class Settings(BaseSettings):
     cost_tracking_enabled: bool = True
     git_tools_enabled: bool = True
     dangerous_command_warn: bool = True
+    agent_tool_profile: Literal["core", "full"] = "core"
+    agent_enable_shell_tools: bool = False
+    agent_enable_browser_tools: bool = False
+    agent_enable_web_media_tools: bool = False
+    agent_enable_git_tools: bool = False
 
     def resolve_allowed_paths(self, cwd: str) -> list[Path]:
         """Return resolved allowed paths, defaulting to session cwd."""
@@ -100,35 +139,19 @@ class Settings(BaseSettings):
             return [Path(p).resolve() for p in self.allowed_paths]
         return [Path(cwd).resolve()]
 
-    def create_llm(self) -> BaseChatModel:
+    def create_llm(self, model: str | None = None) -> BaseChatModel:
         """Instantiate the chat model from the model string.
 
         Supports model strings like "openai:gpt-4o" or "anthropic:claude-sonnet-4-5".
         If no provider prefix, defaults to OpenAI-compatible with optional base_url.
         """
-        model_str = self.llm_model
-        if ":" in model_str:
-            provider, model_name = model_str.split(":", 1)
-        else:
-            provider, model_name = "openai", model_str
-
-        provider = provider.lower()
-        if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-
-            kwargs: dict = {"model": model_name, "max_tokens": 8192}
-            if self.llm_api_key:
-                kwargs["api_key"] = self.llm_api_key
-            return ChatAnthropic(**kwargs)
-        else:
-            from langchain_openai import ChatOpenAI
-
-            kwargs = {"model": model_name}
-            if self.llm_api_key:
-                kwargs["api_key"] = self.llm_api_key
-            if self.llm_base_url:
-                kwargs["base_url"] = self.llm_base_url
-            return ChatOpenAI(**kwargs)
+        provider, model_name = _resolve_model_parts(model or self.llm_model)
+        return _create_cached_llm(
+            provider,
+            model_name,
+            self.llm_api_key,
+            self.llm_base_url,
+        )
 
 
 def get_settings() -> Settings:

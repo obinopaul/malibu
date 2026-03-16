@@ -75,6 +75,7 @@ def build_native_tools(
         settings=resolved_settings,
         cwd=cwd,
         session_id=resolved_session_id,
+        tool_profile="full",
     )
 
 

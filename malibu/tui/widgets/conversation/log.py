@@ -7,7 +7,9 @@ from typing import Any
 from textual.containers import VerticalScroll
 
 from malibu.tui.widgets.conversation.blocks import (
+    ActivityStatusBlock,
     AssistantMessageBlock,
+    InterruptStatusBlock,
     InlineDecisionBlock,
     SystemMessageBlock,
     ThoughtMessageBlock,
@@ -35,6 +37,7 @@ class ConversationLog(VerticalScroll):
         self.auto_follow = True
         self._assistant_block: AssistantMessageBlock | None = None
         self._tool_blocks: dict[str, ToolCallBlock] = {}
+        self._activity_block: ActivityStatusBlock | None = None
         self._inline_prompt: Any | None = None
         self._welcome_block: WelcomeMessageBlock | None = None
 
@@ -60,6 +63,7 @@ class ConversationLog(VerticalScroll):
     def add_user_message(self, text: str) -> None:
         self._assistant_block = None
         self.mount(UserMessageBlock(text))
+        self._keep_activity_last()
         self.scroll_latest()
 
     def add_assistant_message(self, text: str) -> None:
@@ -68,16 +72,19 @@ class ConversationLog(VerticalScroll):
             self.mount(self._assistant_block)
         else:
             self._assistant_block.append_text(text)
+        self._keep_activity_last()
         self.scroll_latest()
 
     def add_system_message(self, text: str, *, title: str = "System", border_style: str = "#475569") -> None:
         self._assistant_block = None
         self.mount(SystemMessageBlock(text, title=title, border_style=border_style))
+        self._keep_activity_last()
         self.scroll_latest()
 
     def add_thought(self, text: str) -> None:
         self._assistant_block = None
         self.mount(ThoughtMessageBlock(text))
+        self._keep_activity_last()
         self.scroll_latest()
 
     def start_tool_call(
@@ -105,6 +112,7 @@ class ConversationLog(VerticalScroll):
             block.set_title(title)
             block.set_status(status)
             block.set_input(raw_input)
+        self._keep_activity_last()
         self.scroll_latest()
         return block
 
@@ -129,18 +137,21 @@ class ConversationLog(VerticalScroll):
             block.set_input(raw_input)
         if output_text is not None:
             block.set_output(output_text, truncated=truncated)
+        self._keep_activity_last()
         self.scroll_latest()
         return block
 
     def add_tool_group(self, title: str, items: list[str]) -> None:
         self._assistant_block = None
         self.mount(ToolGroupBlock(title, items))
+        self._keep_activity_last()
         self.scroll_latest()
 
     def render_inline_prompt(self, block: InlineDecisionBlock) -> None:
         self.clear_inline_prompt()
         self._inline_prompt = block
         self.mount(block)
+        self._keep_activity_last()
         self.scroll_latest()
 
     def clear_inline_prompt(self) -> None:
@@ -151,9 +162,52 @@ class ConversationLog(VerticalScroll):
     def clear_log(self) -> None:
         self.remove_children()
         self._tool_blocks.clear()
+        self._activity_block = None
         self._assistant_block = None
         self._inline_prompt = None
         self._welcome_block = None
+
+    def show_activity(self, *, phase, label: str, details: str = "", frame: str = "-") -> None:
+        if self._activity_block is None or not self._activity_block.parent:
+            self._activity_block = ActivityStatusBlock(
+                phase=phase,
+                label=label,
+                details=details,
+                frame=frame,
+            )
+            self.mount(self._activity_block)
+        else:
+            self._activity_block.set_state(phase=phase, label=label, details=details)
+            self._activity_block.set_frame(frame)
+        self._keep_activity_last()
+        self.scroll_latest()
+
+    def clear_activity(self) -> None:
+        if self._activity_block is not None and getattr(self._activity_block, "parent", None):
+            self._activity_block.remove()
+        self._activity_block = None
+
+    def add_interrupt_status(
+        self,
+        *,
+        title: str,
+        subtitle: str,
+        body: str,
+        state: str = "waiting",
+        detail: str = "",
+    ) -> InterruptStatusBlock:
+        block = InterruptStatusBlock(
+            title=title,
+            subtitle=subtitle,
+            body=body,
+            state=state,
+            detail=detail,
+        )
+        self._assistant_block = None
+        self.mount(block)
+        self._keep_activity_last()
+        self.scroll_latest()
+        return block
 
     def refresh_theme(self) -> None:
         for child in self.children:
@@ -163,3 +217,14 @@ class ConversationLog(VerticalScroll):
     def scroll_latest(self) -> None:
         if self.auto_follow:
             self.scroll_end(animate=False)
+
+    def tick_animations(self, frame: str) -> None:
+        if self._activity_block is not None and getattr(self._activity_block, "parent", None):
+            self._activity_block.set_frame(frame)
+        for block in self._tool_blocks.values():
+            block.set_spinner_frame(frame)
+
+    def _keep_activity_last(self) -> None:
+        if self._activity_block is not None and getattr(self._activity_block, "parent", None):
+            self._activity_block.remove()
+            self.mount(self._activity_block)

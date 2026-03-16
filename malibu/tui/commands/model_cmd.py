@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from malibu.tui.commands.base import BaseCommand, CommandContext
+from malibu.tui.screens import OptionPickerItem, OptionPickerScreen
 
 
 class ModelCommand(BaseCommand):
@@ -12,13 +13,33 @@ class ModelCommand(BaseCommand):
 
     async def execute(self, ctx: CommandContext, args: list[str]) -> None:
         if not args:
-            self._post_system(
-                ctx,
-                "Use [bold]/model <model_id>[/] to switch the active model.",
+            model_candidates = list(ctx.app.get_model_candidates())
+            if not model_candidates:
+                self._post_system(
+                    ctx,
+                    "No model choices are currently available in the TUI bootstrap state.",
+                )
+                return
+            selected = await ctx.app.push_screen_wait(
+                OptionPickerScreen(
+                    title="Switch Model",
+                    subtitle="Select the active language model for this session.",
+                    items=[
+                        OptionPickerItem(
+                            value=model,
+                            label=model,
+                            description="available model",
+                        )
+                        for model in model_candidates
+                    ],
+                )
             )
-            return
+            if not selected:
+                return
+            model_id = selected
+        else:
+            model_id = args[0]
 
-        model_id = args[0]
         await ctx.conn.set_session_model(
             session_id=ctx.session_id, model_id=model_id
         )

@@ -59,13 +59,18 @@ JsonEditorModal TextArea {
 
 CommandPaletteScreen DataTable,
 SessionBrowserScreen DataTable,
-McpViewerModal DataTable {
+McpViewerModal DataTable,
+OptionPickerScreen DataTable,
+ReviewPromptScreen DataTable,
+QuestionPromptScreen DataTable {
     background: $surface;
     color: $foreground;
 }
 
 CommandPaletteScreen Input,
-SessionBrowserScreen Input {
+SessionBrowserScreen Input,
+OptionPickerScreen Input,
+QuestionPromptScreen Input {
     background: $surface;
     color: $foreground;
     border: solid $panel-lighten-1;

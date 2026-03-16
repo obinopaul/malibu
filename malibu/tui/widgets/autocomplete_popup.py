@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from rich.panel import Panel
 from rich.text import Text
+from textual import events
+from textual.message import Message
 from textual.widgets import Static
 
 
 class AutocompletePopup(Static):
     """Simple popup that mirrors the chat input completion state."""
+
+    class SelectionRequested(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
 
     DEFAULT_CSS = """
     AutocompletePopup {
@@ -24,6 +31,8 @@ class AutocompletePopup(Static):
         self._items: list[tuple[str, str]] = []
         self._selected = 0
         self._max_visible_rows = max_visible_rows
+        self._window_start = 0
+        self._visible_count = 0
 
     def update_items(self, items: list[tuple[str, str]], selected: int | None) -> None:
         self._items = list(items)
@@ -47,7 +56,9 @@ class AutocompletePopup(Static):
         start = 0
         if len(self._items) > self._max_visible_rows:
             start = max(0, min(self._selected - self._max_visible_rows + 1, len(self._items) - self._max_visible_rows))
+        self._window_start = start
         visible_items = self._items[start : start + self._max_visible_rows]
+        self._visible_count = len(visible_items)
         lines: list[Text] = []
         for visible_index, (label, meta) in enumerate(visible_items, start=start):
             active = visible_index == self._selected
@@ -73,3 +84,10 @@ class AutocompletePopup(Static):
                 padding=(0, 1),
             )
         )
+
+    def on_click(self, event: events.Click) -> None:
+        if not self._items:
+            return
+        row = event.y - 1
+        if 0 <= row < self._visible_count:
+            self.post_message(self.SelectionRequested(self._window_start + row))

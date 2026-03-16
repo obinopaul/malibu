@@ -31,6 +31,10 @@ class MalibuApp(App):
 
     TITLE = "Malibu"
     CSS_PATH = "app.tcss"
+    QUIT_CONFIRM_SECONDS = 1.5
+    CLOSE_TIMEOUT_SECONDS = 0.5
+    PROCESS_WAIT_TIMEOUT_SECONDS = 0.5
+    WORKER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
     BINDINGS = [
         Binding("ctrl+c", "cancel", "Cancel", show=False),
@@ -60,6 +64,8 @@ class MalibuApp(App):
         self._closing = False
         self._mcp_servers: list[dict[str, Any]] = []
         self._quit_armed_at: float | None = None
+        self._cancel_task: asyncio.Task[None] | None = None
+        self._shutdown_task: asyncio.Task[None] | None = None
 
         self._command_registry: SlashCommandRegistry = create_default_registry()
         self._chat_screen = ChatScreen()
@@ -86,6 +92,20 @@ class MalibuApp(App):
         """Switch from the welcome screen to the persistent chat shell."""
         self.switch_screen("chat")
 
+    def _set_welcome_status(self, label: str, details: str = "") -> None:
+        if not self._should_show_welcome():
+            return
+        with contextlib.suppress(Exception):
+            screen = self.get_screen("welcome")
+            screen.set_status(label, details)  # type: ignore[attr-defined]
+
+    def _set_welcome_ready(self) -> None:
+        if not self._should_show_welcome():
+            return
+        with contextlib.suppress(Exception):
+            screen = self.get_screen("welcome")
+            screen.set_ready(True)  # type: ignore[attr-defined]
+
     def _watch_theme(self, theme_name: str) -> None:
         super()._watch_theme(theme_name)
         self.call_next(self._chat_screen.refresh_theme)
@@ -105,6 +125,7 @@ class MalibuApp(App):
 
         settings = get_settings()
         setup_logging(settings)
+        self._set_welcome_status("Starting Malibu", "Loading configuration and local services.")
 
         self._bridge = TUIBridge(self)
         client = MalibuClient(
@@ -119,18 +140,26 @@ class MalibuApp(App):
         mcp_servers = discover_mcp_servers(self._cwd)
         self._mcp_servers = mcp_servers
 
+        self._set_welcome_status("Connecting local agent", "Opening the local ACP session.")
         async with connect_local_agent(client, settings=settings) as (conn, process):
             self._conn = conn
             self._process = process
             stderr_task = asyncio.create_task(self._drain_stderr(process))
 
             try:
+                self._set_welcome_status("Initializing protocol", "Negotiating capabilities with the local agent.")
                 await asyncio.wait_for(
                     conn.initialize(protocol_version=PROTOCOL_VERSION, client_capabilities=None),
                     timeout=15.0,
                 )
+                self._set_welcome_status("Opening session", "Preparing the Malibu session record.")
                 self._session_id = await self._open_session(conn, mcp_servers)
+                self._set_welcome_status(
+                    "Warming up agent",
+                    "Loading the model, core tools, hooks, and startup state.",
+                )
                 await self._bootstrap_chat()
+                self._set_welcome_ready()
 
                 if self._initial_prompt:
                     prompt = self._initial_prompt
@@ -273,38 +302,85 @@ class MalibuApp(App):
     # ------------------------------------------------------------------
 
     def action_cancel(self) -> None:
+        if self._closing:
+            return
         now = time.monotonic()
-        if self._quit_armed_at is not None and now - self._quit_armed_at < 1.5:
+        if self._quit_armed_at is not None and now - self._quit_armed_at < self.QUIT_CONFIRM_SECONDS:
             self.action_quit()
             return
 
         self._quit_armed_at = now
         if self._conn and self._session_id:
-
-            async def _cancel() -> None:
-                try:
-                    await self._conn.cancel(session_id=self._session_id)
-                except Exception:
-                    pass
-
-            asyncio.ensure_future(_cancel())
-        self.notify("Press Ctrl+C again to quit", severity="warning", timeout=1.5)
+            if self._cancel_task is not None and not self._cancel_task.done():
+                self._cancel_task.cancel()
+            self._cancel_task = asyncio.create_task(
+                self._cancel_current_run(),
+                name="malibu.tui.cancel",
+            )
+        self.notify(
+            "Press Ctrl+C again to quit",
+            severity="warning",
+            timeout=self.QUIT_CONFIRM_SECONDS,
+        )
 
     def action_quit(self) -> None:
         self._quit_armed_at = None
         if self._closing:
             return
         self._closing = True
+        self._shutdown_task = asyncio.create_task(
+            self._shutdown_and_exit(),
+            name="malibu.tui.shutdown",
+        )
+
+    async def _cancel_current_run(self) -> None:
+        if self._conn is None or self._session_id is None:
+            return
+        try:
+            await self._conn.cancel(session_id=self._session_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+    async def _shutdown_and_exit(self) -> None:
+        cancel_task = self._cancel_task
+        self._cancel_task = None
+        if cancel_task is not None and not cancel_task.done():
+            cancel_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancel_task
+
+        conn = self._conn
+        process = self._process
+        workers = list(self.workers)
+
+        self._conn = None
+        self._process = None
+        self._bridge = None
+
+        if conn is not None:
+            with contextlib.suppress(Exception, asyncio.TimeoutError):
+                await asyncio.wait_for(conn.close(), timeout=self.CLOSE_TIMEOUT_SECONDS)
+
+        if process is not None:
+            with contextlib.suppress(Exception):
+                process.terminate()
+            with contextlib.suppress(Exception, asyncio.TimeoutError):
+                await asyncio.wait_for(process.wait(), timeout=self.PROCESS_WAIT_TIMEOUT_SECONDS)
+            if getattr(process, "returncode", None) is None:
+                with contextlib.suppress(Exception):
+                    process.kill()
+                with contextlib.suppress(Exception, asyncio.TimeoutError):
+                    await asyncio.wait_for(process.wait(), timeout=self.PROCESS_WAIT_TIMEOUT_SECONDS)
+
         with contextlib.suppress(Exception):
             self.workers.cancel_all()
-        if self._process is not None:
-            with contextlib.suppress(Exception):
-                self._process.terminate()
-            with contextlib.suppress(Exception):
-                self._process.kill()
-        self._process = None
-        self._conn = None
-        self._bridge = None
+        with contextlib.suppress(Exception, asyncio.TimeoutError):
+            await asyncio.wait_for(
+                self.workers.wait_for_complete(workers),
+                timeout=self.WORKER_SHUTDOWN_TIMEOUT_SECONDS,
+            )
         self.exit()
 
     @property
@@ -326,6 +402,13 @@ class MalibuApp(App):
     @property
     def cwd(self) -> str:
         return self._cwd
+
+    @property
+    def chat_screen(self) -> ChatScreen:
+        return self._chat_screen
+
+    def get_model_candidates(self) -> list[str]:
+        return self._chat_screen.model_candidates
 
     def exit(self, result: object = None, *args: object, **kwargs: object) -> None:
         self._closing = True

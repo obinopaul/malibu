@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from malibu.agent.modes import DEFAULT_MODES
 from malibu.tui.commands.base import BaseCommand, CommandContext
+from malibu.tui.screens import OptionPickerItem, OptionPickerScreen
 
 MODE_MAP: dict[str, str] = {
     "plan": "plan",
@@ -23,19 +24,26 @@ class ModeCommand(BaseCommand):
 
     async def execute(self, ctx: CommandContext, args: list[str]) -> None:
         if not args:
-            mode_lines = "\n".join(
-                f"  - **{mode.id:18}** {mode.description}"
-                for mode in DEFAULT_MODES.available_modes
+            selected = await ctx.app.push_screen_wait(
+                OptionPickerScreen(
+                    title="Switch Mode",
+                    subtitle="Select how much Malibu should ask before acting.",
+                    items=[
+                        OptionPickerItem(
+                            value=mode.id,
+                            label=mode.id,
+                            description=mode.description or mode.name,
+                        )
+                        for mode in DEFAULT_MODES.available_modes
+                    ],
+                )
             )
-            self._post_system(
-                ctx,
-                "**Available modes:**\n\n"
-                f"{mode_lines}\n\n"
-                "*Aliases: normal -> accept_edits, auto -> accept_everything, ask -> ask_before_edits*",
-            )
-            return
+            if not selected:
+                return
+            mode_name = selected
+        else:
+            mode_name = args[0].lower()
 
-        mode_name = args[0].lower()
         mode_id = MODE_MAP.get(mode_name)
 
         if mode_id is None:
@@ -45,8 +53,12 @@ class ModeCommand(BaseCommand):
                 f"Choose from: {', '.join(mode.id for mode in DEFAULT_MODES.available_modes)}",
             )
             return
+
+        await ctx.conn.set_session_mode(
+            session_id=ctx.session_id,
+            mode_id=mode_id,
         )
-        self._post_system(ctx, f"Mode set to [bold]{mode_name}[/] ({mode_id})")
+        self._post_system(ctx, f"Mode set to [bold]{mode_id}[/]")
 
     @staticmethod
     def _post_system(ctx: CommandContext, text: str) -> None:

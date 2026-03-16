@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +12,6 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalGroup
 from textual.screen import Screen
-from textual.widgets import Static
 
 from acp.schema import (
     AgentMessageChunk,
@@ -41,12 +42,13 @@ from malibu.tui.controllers import (
     MessageController,
     PlanApprovalController,
 )
-from malibu.tui.managers import DisplayLedger, InterruptKind, InterruptManager, MessageHistory
+from malibu.tui.managers import DisplayLedger, InterruptManager, MessageHistory, RunPhase, RunState
 from malibu.tui.protocol import TUI_INTERRUPT_METHOD
 from malibu.tui.serialization import deserialize_session_update
 from malibu.tui.screens.command_palette import CommandPaletteScreen
 from malibu.tui.screens.session_browser import SessionBrowserScreen
 from malibu.tui.services import ConsoleBufferManager, HistoryHydrator, SpinnerService, UpdateProcessor
+from malibu.tui.widgets.activity_strip import ActivityStrip
 from malibu.tui.widgets.autocomplete_popup import AutocompletePopup
 from malibu.tui.widgets.chat_input import ChatTextArea, CompletionItem
 from malibu.tui.widgets.conversation.log import ConversationLog
@@ -96,7 +98,6 @@ class ChatScreen(Screen):
     #composer-status {
         height: 1;
         padding: 0 1;
-        color: $foreground-muted;
     }
     """
 
@@ -115,7 +116,7 @@ class ChatScreen(Screen):
         self.chat_input: ChatTextArea | None = None
         self.autocomplete_popup: AutocompletePopup | None = None
         self.composer: VerticalGroup | None = None
-        self.composer_status: Static | None = None
+        self.composer_status: ActivityStrip | None = None
 
         self.update_processor = UpdateProcessor(self)
         self.history_hydrator = HistoryHydrator(self.update_processor)
@@ -140,6 +141,12 @@ class ChatScreen(Screen):
         self._spinner_timer = None
         self._shell_ready = True
         self._activity_started = False
+        self._input_locked = False
+        self._input_lock_reason = ""
+        self._run_state = RunState()
+        self._prompt_watchdog: asyncio.Task[None] | None = None
+        self._run_activity_seen = False
+        self._pending_remote_user_echoes: deque[str] = deque()
 
     def compose(self) -> ComposeResult:
         self.status_bar = StatusBar(cwd=str(Path.cwd()))
@@ -152,7 +159,7 @@ class ChatScreen(Screen):
             completion_provider=self._build_completions,
         )
         self.composer = VerticalGroup(id="composer")
-        self.composer_status = Static(id="composer-status")
+        self.composer_status = ActivityStrip()
         yield self.status_bar
         yield self.welcome_dock
         with Horizontal(id="shell-body"):
@@ -171,12 +178,13 @@ class ChatScreen(Screen):
         self.conversation = self.query_one(ConversationLog)
         self.plan_panel = self.query_one(PlanPanel)
         self.chat_input = self.query_one(ChatTextArea)
-        self.composer_status = self.query_one("#composer-status", Static)
+        self.composer_status = self.query_one(ActivityStrip)
         self._spinner_timer = self.set_interval(0.12, self._tick_spinner)
         self.chat_input.focus()
         self.status_bar.set_cwd(self.app.cwd)  # type: ignore[attr-defined]
         if self.welcome_dock is not None:
             self.welcome_dock.set_cwd(self.app.cwd)  # type: ignore[attr-defined]
+        self._apply_input_lock()
         self._refresh_composer_height(False)
         self._render_composer_status()
 
@@ -216,23 +224,33 @@ class ChatScreen(Screen):
         self.set_shell_ready(True)
         if hydrated:
             self._mark_activity_started()
-
-    # ------------------------------------------------------------------
-    # Public API used by controllers
-    # ------------------------------------------------------------------
+        if payload.get("history_truncated") and self.conversation is not None:
+            self.conversation.add_system_message(
+                "Older session activity was truncated during bootstrap to keep startup responsive.",
+                title="History Truncated",
+                border_style="#8B6A58",
+            )
 
     async def dispatch_prompt(self, text: str) -> None:
         await self.app.dispatch_prompt(text)  # type: ignore[attr-defined]
 
     def start_processing(self, label: str) -> None:
         self.spinner_service.start("agent", label)
+        self._run_activity_seen = False
+        self._start_prompt_watchdog()
+        self.set_run_state(RunPhase.STARTING, label, details="Waiting for the first agent event...")
         self._tick_spinner()
 
     def stop_processing(self) -> None:
+        self._cancel_prompt_watchdog()
         self.spinner_service.stop("agent")
         self.display_ledger.complete_turn()
         if self.status_bar is not None:
             self.status_bar.set_spinner("")
+        if self.conversation is not None:
+            self.conversation.clear_activity()
+        self.set_input_locked(False)
+        self.set_run_state(RunPhase.IDLE, "Ready", details="")
 
     def update_queue_depth(self, depth: int) -> None:
         if self.status_bar is not None:
@@ -248,6 +266,10 @@ class ChatScreen(Screen):
             self.display_ledger.replay("user", content.text)
             self.conversation.add_user_message(content.text)
             return
+        if self._pending_remote_user_echoes and self._pending_remote_user_echoes[0] == content.text:
+            self._pending_remote_user_echoes.popleft()
+            self.display_ledger.replay("user", content.text)
+            return
         if self.display_ledger.begin_user_turn(content.text):
             self.conversation.add_user_message(content.text)
 
@@ -260,6 +282,8 @@ class ChatScreen(Screen):
             self.display_ledger.replay("assistant", content.text)
             self.conversation.add_assistant_message(content.text)
             return
+        self._mark_run_activity()
+        self.set_run_state(RunPhase.STREAMING, "Streaming response")
         if self.display_ledger.allow_assistant_text(content.text):
             self.conversation.add_assistant_message(content.text)
 
@@ -267,12 +291,17 @@ class ChatScreen(Screen):
         content = update.content
         if self.conversation is not None and isinstance(content, TextContentBlock):
             self._mark_activity_started()
+            self._mark_run_activity()
+            details = content.text.strip()[:120] if content.text.strip() else ""
+            self.set_run_state(RunPhase.THINKING, "Thinking", details=details)
             self.conversation.add_thought(content.text)
 
     def on_tool_call_start(self, update: ToolCallStart) -> None:
         if self.conversation is None:
             return
         self._mark_activity_started()
+        self._mark_run_activity()
+        self.set_run_state(RunPhase.TOOL_RUNNING, update.title or "Running tool")
         self.conversation.start_tool_call(
             update.tool_call_id,
             update.title or "Tool",
@@ -303,11 +332,20 @@ class ChatScreen(Screen):
         )
         if update.status in {"completed", "failed"}:
             self.spinner_service.stop(update.tool_call_id)
+            if update.status == "failed":
+                self.set_run_state(
+                    RunPhase.ERROR,
+                    update.title or "Tool failed",
+                    details="The tool reported a failure.",
+                )
 
     def on_plan_update(self, update: AgentPlanUpdate) -> None:
         if self.plan_panel is not None:
             self.plan_panel.set_plan(update)
-        self._render_composer_status()
+        if update.entries:
+            self._mark_run_activity()
+            if self._run_state.phase not in {RunPhase.WAITING_APPROVAL, RunPhase.WAITING_USER}:
+                self.set_run_state(RunPhase.PLANNING, "Updating plan")
 
     def on_mode_update(self, update: CurrentModeUpdate) -> None:
         if self.status_bar is not None:
@@ -350,9 +388,24 @@ class ChatScreen(Screen):
         title = str(payload.get("title", "Tool group"))
         items = [str(item) for item in payload.get("items", [])]
         if items:
+            self._mark_run_activity()
+            self.set_run_state(RunPhase.TOOL_RUNNING, title)
             self.conversation.add_tool_group(title, items)
 
     def on_status_event(self, payload: dict[str, Any]) -> None:
+        phase_name = payload.get("phase")
+        if phase_name is not None:
+            try:
+                phase = RunPhase(str(phase_name))
+            except ValueError:
+                phase = self._run_state.phase
+            label = str(payload.get("label", self._run_state.label))
+            details = str(payload.get("details", "")) if payload.get("details") else ""
+            lock_input = bool(payload.get("lock_input", False))
+            if phase is not RunPhase.STARTING or label != "Waiting for agent":
+                self._mark_run_activity()
+            self.set_run_state(phase, label, lock_input=lock_input, details=details)
+
         if self.status_bar is not None:
             spinner = str(payload.get("spinner", "")).strip()
             if spinner:
@@ -371,10 +424,6 @@ class ChatScreen(Screen):
             self.status_bar.set_model(str(payload["model"]))
         if self.welcome_dock is not None and "model" in payload:
             self.welcome_dock.set_model(str(payload["model"]))
-
-    # ------------------------------------------------------------------
-    # Message bridge handlers
-    # ------------------------------------------------------------------
 
     @on(SessionUpdateMessage)
     def handle_session_update(self, message: SessionUpdateMessage) -> None:
@@ -459,11 +508,6 @@ class ChatScreen(Screen):
 
     @on(ChatTextArea.Submitted)
     def handle_chat_submitted(self, message: ChatTextArea.Submitted) -> None:
-        if self.interrupt_manager.active_kind is InterruptKind.ASK_USER:
-            if self.ask_user_controller.submit_answer(message.text):
-                self.chat_input.focus()  # type: ignore[union-attr]
-                self.chat_input.load_text("")  # type: ignore[union-attr]
-            return
         self.run_worker(self.message_controller.submit(message.text), exclusive=False)
 
     @on(ChatTextArea.CompletionsChanged)
@@ -472,16 +516,12 @@ class ChatScreen(Screen):
             self.autocomplete_controller.update(message.items, message.selected)
         self._refresh_composer_height(bool(message.items))
 
-    def on_key(self, event: Any) -> None:
-        controller = self.interrupt_manager.controller
-        if controller is not None and hasattr(controller, "handle_key"):
-            if controller.handle_key(event.key):
-                event.stop()
-                event.prevent_default()
-
-    # ------------------------------------------------------------------
-    # Bindings and shell helpers
-    # ------------------------------------------------------------------
+    @on(AutocompletePopup.SelectionRequested)
+    def handle_completion_selection_requested(self, message: AutocompletePopup.SelectionRequested) -> None:
+        if self.chat_input is None:
+            return
+        self.chat_input.set_selected_completion(message.index)
+        self.chat_input.focus()
 
     def action_toggle_plan(self) -> None:
         if self.plan_panel is not None:
@@ -493,6 +533,10 @@ class ChatScreen(Screen):
         if self.plan_panel is not None:
             self.plan_panel.clear_plan()
         self._activity_started = False
+        self._run_state = RunState()
+        self._pending_remote_user_echoes.clear()
+        self.set_input_locked(False)
+        self._cancel_prompt_watchdog()
         if self.welcome_dock is not None:
             self.welcome_dock.reveal()
         self._render_composer_status()
@@ -536,8 +580,11 @@ class ChatScreen(Screen):
         self.run_worker(_open(), exclusive=False)
 
     def _tick_spinner(self) -> None:
+        spinner_text = self.spinner_service.next_frame()
         if self.status_bar is not None:
-            self.status_bar.set_spinner(self.spinner_service.next_frame())
+            self.status_bar.set_spinner(spinner_text)
+        if self.conversation is not None:
+            self.conversation.tick_animations(self.spinner_service.current_symbol())
         self._render_composer_status()
 
     def _refresh_composer_height(self, expanded: bool) -> None:
@@ -556,11 +603,21 @@ class ChatScreen(Screen):
             self.plan_panel.refresh_theme()
         if self.autocomplete_popup is not None:
             self.autocomplete_popup.refresh_theme()
+        if self.composer_status is not None:
+            self.composer_status.refresh_theme()
         self._render_composer_status()
 
     @property
     def shell_ready(self) -> bool:
         return self._shell_ready
+
+    @property
+    def input_locked(self) -> bool:
+        return self._input_locked
+
+    def is_local_command(self, text: str) -> bool:
+        registry = getattr(self.app, "command_registry", None)
+        return bool(registry and registry.is_command(text))
 
     def set_shell_ready(self, ready: bool) -> None:
         self._shell_ready = ready
@@ -568,12 +625,52 @@ class ChatScreen(Screen):
             self.welcome_dock.set_ready(ready)
         self._render_composer_status()
 
-    def record_local_submission(self, text: str) -> None:
+    def set_input_locked(self, locked: bool, reason: str = "") -> None:
+        self._input_locked = locked
+        self._input_lock_reason = reason
+        self._run_state.lock_input = locked
+        self._apply_input_lock()
+        self._render_composer_status()
+
+    def set_run_state(
+        self,
+        phase: RunPhase,
+        label: str,
+        *,
+        lock_input: bool | None = None,
+        details: str = "",
+    ) -> None:
+        if lock_input is not None:
+            self._input_locked = lock_input
+        self._run_state = RunState(
+            phase=phase,
+            label=label,
+            lock_input=self._input_locked,
+            details=details,
+        )
+        self._apply_input_lock()
+        if self.conversation is not None:
+            if phase is RunPhase.IDLE:
+                self.conversation.clear_activity()
+            else:
+                self.conversation.show_activity(
+                    phase=phase,
+                    label=label,
+                    details=details,
+                    frame=self.spinner_service.current_symbol(),
+                )
+        self._render_composer_status()
+
+    def record_local_submission(self, text: str, *, expect_remote_echo: bool) -> None:
         if not text.strip() or self.conversation is None:
             return
         self._mark_activity_started()
-        if self.display_ledger.begin_user_turn(text):
-            self.conversation.add_user_message(text)
+        if expect_remote_echo:
+            self._pending_remote_user_echoes.append(text)
+            self.display_ledger.replay("user", text)
+        else:
+            self.display_ledger.begin_user_turn(text)
+        self.conversation.add_user_message(text)
 
     def _mark_activity_started(self) -> None:
         if self._activity_started:
@@ -593,29 +690,48 @@ class ChatScreen(Screen):
     def _render_composer_status(self) -> None:
         if self.composer_status is None:
             return
-        theme = getattr(self.app, "current_theme", None)
-        accent = getattr(theme, "accent", None) or getattr(theme, "primary", None) or "#D7A77A"
-        foreground = getattr(theme, "foreground", None) or "#F3EBDD"
-        muted = getattr(theme, "variables", {}).get("foreground-muted", "#AA9988") if theme else "#AA9988"
-        warning = getattr(theme, "warning", None) or "#C99A52"
-        success = getattr(theme, "success", None) or "#879A63"
+        if self.status_bar is not None:
+            self.composer_status.set_mode(self.status_bar.mode_name)
+            self.composer_status.set_queue_depth(self.status_bar.queue_depth)
+        self.composer_status.set_shell_ready(self._shell_ready)
+        self.composer_status.set_state(self._run_state)
 
-        mode_name = self.status_bar.mode_name if self.status_bar is not None else "accept_edits"
-        queue_depth = self.status_bar.queue_depth if self.status_bar is not None else 0
-        spinner_text = self.status_bar.spinner_text if self.status_bar is not None else ""
-        state_text = spinner_text or ("ready" if self._shell_ready else "starting local agent...")
-        state_style = success if self._shell_ready and not spinner_text else warning
+    def _apply_input_lock(self) -> None:
+        if self.chat_input is not None:
+            self.chat_input.disabled = self._input_locked
+            if not self._input_locked:
+                self.chat_input.focus()
+        if self._input_locked and self.autocomplete_controller is not None:
+            self.autocomplete_controller.update([], None)
+            self._refresh_composer_height(False)
 
-        parts = [
-            f"[{muted}]mode[/] [{accent}]{mode_name}[/]",
-            f"[{muted}]status[/] [{state_style}]{state_text}[/]",
-        ]
-        if queue_depth:
-            parts.append(f"[{warning}]queued {queue_depth}[/]")
-        else:
-            parts.append(f"[{muted}]press / for commands[/]")
-        parts.append(f"[{muted}]shift+enter newline[/]")
-        self.composer_status.update("  •  ".join(parts))
+    def _start_prompt_watchdog(self) -> None:
+        self._cancel_prompt_watchdog()
+        self._prompt_watchdog = asyncio.create_task(self._prompt_start_watchdog())
+
+    def _cancel_prompt_watchdog(self) -> None:
+        if self._prompt_watchdog is not None:
+            self._prompt_watchdog.cancel()
+            self._prompt_watchdog = None
+
+    async def _prompt_start_watchdog(self) -> None:
+        try:
+            await asyncio.sleep(1.5)
+        except asyncio.CancelledError:
+            return
+
+        if not self._run_activity_seen and self.message_controller.busy:
+            self.set_run_state(
+                RunPhase.STARTING,
+                self._run_state.label or "Waiting for agent",
+                details="Still waiting for the first agent event...",
+            )
+
+    def _mark_run_activity(self) -> None:
+        self._run_activity_seen = True
+        self._cancel_prompt_watchdog()
+        if self._run_state.phase is RunPhase.STARTING and self._run_state.details:
+            self._run_state.details = ""
 
     def _build_completions(self, text: str, cursor: int) -> list[CompletionItem]:
         prefix_text = text[:cursor]
@@ -713,6 +829,10 @@ class ChatScreen(Screen):
             for model in self._model_candidates
             if not fragment or model.startswith(fragment)
         ]
+
+    @property
+    def model_candidates(self) -> list[str]:
+        return list(self._model_candidates)
 
     def _build_session_completions(
         self,

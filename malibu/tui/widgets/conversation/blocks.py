@@ -12,6 +12,7 @@ from rich.text import Text
 from textual.widget import Widget
 from textual.widgets import Markdown, Static
 
+from malibu.tui.managers import RunPhase
 from malibu.tui.widgets.welcome_dock import build_welcome_renderable
 
 
@@ -147,6 +148,150 @@ class ThoughtMessageBlock(SystemMessageBlock):
         super().__init__(text, title="Thinking", border_style="#334155")
 
 
+class ActivityStatusBlock(Static):
+    """Ephemeral live activity block shown while a run is in progress."""
+
+    DEFAULT_CSS = """
+    ActivityStatusBlock {
+        margin: 0 0 1 0;
+        width: 1fr;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        phase: RunPhase,
+        label: str,
+        details: str = "",
+        frame: str = "-",
+    ) -> None:
+        super().__init__()
+        self.phase = phase
+        self.label = label
+        self.details = details
+        self.frame = frame
+        self._refresh_content()
+
+    def set_state(self, *, phase: RunPhase, label: str, details: str = "") -> None:
+        self.phase = phase
+        self.label = label
+        self.details = details
+        self._refresh_content()
+
+    def set_frame(self, frame: str) -> None:
+        self.frame = frame
+        if self.phase in {
+            RunPhase.STARTING,
+            RunPhase.THINKING,
+            RunPhase.PLANNING,
+            RunPhase.TOOL_RUNNING,
+            RunPhase.STREAMING,
+        }:
+            self._refresh_content()
+
+    def refresh_theme(self) -> None:
+        self._refresh_content()
+
+    def _refresh_content(self) -> None:
+        accent = _theme_color(self, "accent", "#D7A77A")
+        foreground = _theme_color(self, "foreground", "#F3EBDD")
+        muted = _theme_color(self, "foreground-muted", "#AA9988")
+        warning = _theme_color(self, "warning", "#C99A52")
+        success = _theme_color(self, "success", "#879A63")
+        error = _theme_color(self, "error", "#C25B4B")
+
+        border = {
+            RunPhase.WAITING_APPROVAL: error,
+            RunPhase.WAITING_USER: error,
+            RunPhase.ERROR: error,
+            RunPhase.CANCELLED: warning,
+            RunPhase.STREAMING: success,
+        }.get(self.phase, accent)
+        phase_label = self.phase.value.replace("_", " ")
+        icon = self.frame if self.phase not in {RunPhase.ERROR, RunPhase.CANCELLED} else "!"
+        lines: list[RenderableType] = [
+            Text(f"{icon} {self.label}", style=f"bold {foreground}"),
+            Text(phase_label, style=muted),
+        ]
+        if self.details:
+            lines.append(Text(self.details, style=muted))
+        self.update(
+            Panel(
+                Group(*lines),
+                title="Activity",
+                border_style=border,
+                padding=(0, 1),
+            )
+        )
+
+
+class InterruptStatusBlock(Static):
+    """Transcript block for action-required prompts."""
+
+    DEFAULT_CSS = """
+    InterruptStatusBlock {
+        margin: 0 0 1 0;
+        width: 1fr;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        subtitle: str,
+        body: str,
+        state: str = "waiting",
+        detail: str = "",
+    ) -> None:
+        super().__init__()
+        self.title = title
+        self.subtitle = subtitle
+        self.body = body
+        self.state = state
+        self.detail = detail
+        self._refresh_content()
+
+    def set_state(self, state: str, *, detail: str = "") -> None:
+        self.state = state
+        self.detail = detail
+        self._refresh_content()
+
+    def refresh_theme(self) -> None:
+        self._refresh_content()
+
+    def _refresh_content(self) -> None:
+        accent = _theme_color(self, "accent", "#D7A77A")
+        foreground = _theme_color(self, "foreground", "#F3EBDD")
+        muted = _theme_color(self, "foreground-muted", "#AA9988")
+        success = _theme_color(self, "success", "#879A63")
+        error = _theme_color(self, "error", "#C25B4B")
+        warning = _theme_color(self, "warning", "#C99A52")
+        border = {
+            "waiting": error,
+            "approved": success,
+            "answered": success,
+            "rejected": error,
+            "cancelled": warning,
+        }.get(self.state, accent)
+        state_label = self.state.replace("_", " ")
+        lines: list[RenderableType] = [
+            Text(self.subtitle, style=muted),
+            Text(self.body, style=foreground),
+        ]
+        if self.detail:
+            lines.append(Text(self.detail, style=muted))
+        self.update(
+            Panel(
+                Group(*lines),
+                title=f"{self.title} [{state_label}]",
+                border_style=border,
+                padding=(0, 1),
+            )
+        )
+
+
 class WelcomeMessageBlock(Static):
     """Welcome card persisted inside the conversation history."""
 
@@ -218,6 +363,7 @@ class ToolCallBlock(Static):
         self.output_text = ""
         self.expanded = False
         self._truncated = False
+        self._spinner_frame = "-"
         self._refresh_content()
 
     def toggle_expand(self) -> None:
@@ -244,6 +390,11 @@ class ToolCallBlock(Static):
     def on_click(self) -> None:
         if self.output_text:
             self.toggle_expand()
+
+    def set_spinner_frame(self, frame: str) -> None:
+        self._spinner_frame = frame
+        if self.status in {"pending", "in_progress"}:
+            self._refresh_content()
 
     def _build_output_renderable(self) -> RenderableType:
         if not self.output_text:
@@ -273,7 +424,7 @@ class ToolCallBlock(Static):
         success = _theme_color(self, "success", "#22c55e")
         error = _theme_color(self, "error", "#dc2626")
         warning = _theme_color(self, "warning", "#f59e0b")
-        icon = _status_icon(self.status)
+        icon = self._spinner_frame if self.status in {"pending", "in_progress"} else _status_icon(self.status)
         header = Text()
         header_style = error if self.status == "failed" else success if self.status == "completed" else accent
         status_style = error if self.status == "failed" else warning if self.status == "in_progress" else muted
@@ -285,7 +436,7 @@ class ToolCallBlock(Static):
         if self.raw_input is not None:
             preview = _json_preview(self.raw_input)
             if preview:
-                sections.append(Text(preview, style=muted))
+                sections.append(Text(f"input\n{preview}", style=muted))
 
         if self.output_text or self.status in {"pending", "in_progress"}:
             sections.append(self._build_output_renderable())

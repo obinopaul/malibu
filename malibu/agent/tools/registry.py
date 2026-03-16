@@ -229,9 +229,9 @@ def _build_web_media_tools(runtime: ToolRuntime) -> list[Any]:
     ]
 
 
-def build_tools_for_runtime(runtime: ToolRuntime) -> list[Any]:
+def _build_core_coding_tools(runtime: ToolRuntime) -> list[Any]:
     file_tools = _build_file_system_tools(runtime)
-    tools: list[Any] = [
+    return [
         build_write_todos_tool(runtime),
         file_tools["read_file"],
         file_tools["write_file"],
@@ -244,11 +244,24 @@ def build_tools_for_runtime(runtime: ToolRuntime) -> list[Any]:
         file_tools["str_replace"],
         file_tools["lsp"],
     ]
-    tools.extend(_build_shell_tools(runtime))
-    tools.extend(_build_browser_tools(runtime))
-    tools.extend(_build_web_media_tools(runtime))
 
-    if runtime.settings.git_tools_enabled and shutil.which("git"):
+
+def build_tools_for_runtime(runtime: ToolRuntime, *, tool_profile: str | None = None) -> list[Any]:
+    profile = (tool_profile or runtime.settings.agent_tool_profile).lower()
+    tools = _build_core_coding_tools(runtime)
+
+    if profile == "full" or runtime.settings.agent_enable_shell_tools:
+        tools.extend(_build_shell_tools(runtime))
+    if profile == "full" or runtime.settings.agent_enable_browser_tools:
+        tools.extend(_build_browser_tools(runtime))
+    if profile == "full" or runtime.settings.agent_enable_web_media_tools:
+        tools.extend(_build_web_media_tools(runtime))
+
+    if (
+        (profile == "full" or runtime.settings.agent_enable_git_tools)
+        and runtime.settings.git_tools_enabled
+        and shutil.which("git")
+    ):
         tools.extend(build_git_tools(runtime))
 
     return tools
@@ -258,10 +271,11 @@ def build_default_tools(
     settings: Settings | None = None,
     cwd: str | Path | None = None,
     session_id: str | None = None,
+    tool_profile: str | None = None,
 ) -> list[Any]:
     runtime = ToolRuntime(
         settings=settings or get_settings(),
         cwd=Path(cwd or Path.cwd()).resolve(),
         session_id=session_id or "default",
     )
-    return build_tools_for_runtime(runtime)
+    return build_tools_for_runtime(runtime, tool_profile=tool_profile)

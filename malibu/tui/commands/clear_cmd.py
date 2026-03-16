@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from malibu.tui.commands.base import BaseCommand, CommandContext
-from malibu.tui.screens.chat import ChatScreen
 
 
 class ClearCommand(BaseCommand):
@@ -12,12 +11,12 @@ class ClearCommand(BaseCommand):
     usage = "/clear [--new]"
 
     async def execute(self, ctx: CommandContext, args: list[str]) -> None:
-        ctx.app.query_one(ChatScreen).action_clear_messages()
+        ctx.app.chat_screen.action_clear_messages()
 
         if "--new" in args:
-            result = await ctx.conn.new_session()
-            ctx.app.session_id = result.session_id  # type: ignore[attr-defined]
-            self._post_system(ctx, f"[dim]Started new session {result.session_id}[/]")
+            await ctx.app.new_session()
+            if ctx.app.session_id:
+                self._post_system(ctx, f"[dim]Started new session {ctx.app.session_id}[/]")
 
     @staticmethod
     def _post_system(ctx: CommandContext, text: str) -> None:

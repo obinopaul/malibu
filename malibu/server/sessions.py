@@ -7,6 +7,7 @@ import tempfile
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -30,6 +31,12 @@ log = get_logger(__name__)
 class SessionManager:
     """Manage agents, callbacks, and persisted session records."""
 
+    _BOOTSTRAP_HISTORY_EVENT_LIMIT = 200
+    _BOOTSTRAP_HISTORY_BYTE_LIMIT = 48_000
+    _SESSION_SUMMARY_LIMIT = 50
+    _PERSIST_FLUSH_INTERVAL_SECONDS = 0.35
+    _PERSIST_MAX_BUFFERED_EVENTS = 24
+
     def __init__(self, settings: Settings, *, checkpointer: Any | None = None) -> None:
         self._settings = settings
         self._checkpointer = checkpointer or MemorySaver()
@@ -37,10 +44,14 @@ class SessionManager:
         self._cwds: dict[str, str] = {}
         self._modes: dict[str, str] = {}
         self._models: dict[str, str] = {}
+        self._runtime_ready: set[str] = set()
         self._hook_managers: dict[str, HookManager] = {}
         self._cost_trackers: dict[str, CostTracker] = {}
         self._cost_callbacks: dict[str, CostTrackingCallback] = {}
         self._session_cache: dict[str, dict[str, Any]] = {}
+        self._dirty_sessions: set[str] = set()
+        self._last_persist_at: dict[str, float] = {}
+        self._buffered_event_counts: dict[str, int] = {}
 
         self._skill_registry = SkillRegistry()
         self._plugin_manager = PluginManager()
@@ -128,6 +139,32 @@ class SessionManager:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         record["updated_at"] = self._now()
         file_path.write_text(json.dumps(record, indent=2, ensure_ascii=True), encoding="utf-8")
+        self._dirty_sessions.discard(session_id)
+        self._buffered_event_counts[session_id] = 0
+        self._last_persist_at[session_id] = monotonic()
+
+    def _mark_record_dirty(self, session_id: str) -> None:
+        self._dirty_sessions.add(session_id)
+        self._buffered_event_counts[session_id] = self._buffered_event_counts.get(session_id, 0) + 1
+
+    def _maybe_flush_record(self, session_id: str) -> None:
+        buffered_events = self._buffered_event_counts.get(session_id, 0)
+        if buffered_events <= 0:
+            return
+        last_persisted = self._last_persist_at.get(session_id, 0.0)
+        if (
+            buffered_events >= self._PERSIST_MAX_BUFFERED_EVENTS
+            or monotonic() - last_persisted >= self._PERSIST_FLUSH_INTERVAL_SECONDS
+        ):
+            self._save_record(session_id)
+
+    def flush_session(self, session_id: str) -> None:
+        if session_id in self._dirty_sessions:
+            self._save_record(session_id)
+
+    def flush_all(self) -> None:
+        for session_id in list(self._dirty_sessions):
+            self._save_record(session_id)
 
     def _ensure_record(
         self,
@@ -162,7 +199,8 @@ class SessionManager:
             record = self._ensure_record(session_id, cwd=cwd, mode_id=mode, model_id=self.get_model(session_id))
         payload = update.model_dump(by_alias=True, mode="json") if hasattr(update, "model_dump") else update
         record.setdefault("history", []).append({"kind": "session_update", "payload": payload})
-        self._save_record(session_id)
+        self._mark_record_dirty(session_id)
+        self._maybe_flush_record(session_id)
 
     def record_tui_event(self, session_id: str, params: dict[str, Any]) -> None:
         record = self._session_cache.get(session_id)
@@ -171,9 +209,11 @@ class SessionManager:
             mode = self._modes.get(session_id, DEFAULT_MODES.current_mode_id)
             record = self._ensure_record(session_id, cwd=cwd, mode_id=mode, model_id=self.get_model(session_id))
         record.setdefault("history", []).append({"kind": "tui_event", "payload": params})
-        self._save_record(session_id)
+        self._mark_record_dirty(session_id)
+        self._maybe_flush_record(session_id)
 
     def list_session_records(self, *, cwd: str | None = None) -> list[dict[str, Any]]:
+        self.flush_all()
         if cwd is None:
             records = list(self._session_cache.values())
         else:
@@ -188,8 +228,17 @@ class SessionManager:
         records.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
         return records
 
+    def list_session_summaries(self, *, cwd: str | None = None) -> list[dict[str, Any]]:
+        records = self.list_session_records(cwd=cwd)
+        return [
+            self._build_session_summary(record)
+            for record in records[: self._SESSION_SUMMARY_LIMIT]
+        ]
+
     def get_bootstrap_payload(self, session_id: str) -> dict[str, Any]:
+        self.flush_session(session_id)
         record = self._load_record(session_id)
+        history, history_truncated = self._compact_bootstrap_history((record or {}).get("history", []))
         return {
             "session_id": session_id,
             "session_title": record.get("title", f"Session {session_id[:8]}") if record else f"Session {session_id[:8]}",
@@ -197,8 +246,41 @@ class SessionManager:
             "mode": self.get_mode(session_id),
             "model": self.get_model(session_id),
             "config": (record or {}).get("config", {}),
-            "history": list((record or {}).get("history", [])),
+            "history": history,
+            "history_truncated": history_truncated,
         }
+
+    @staticmethod
+    def _build_session_summary(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "session_id": str(record.get("session_id", "")),
+            "cwd": str(record.get("cwd", "")),
+            "title": str(record.get("title", "")),
+            "mode": str(record.get("mode", "")),
+            "model": str(record.get("model", "")),
+            "updated_at": str(record.get("updated_at", "")),
+        }
+
+    def _compact_bootstrap_history(self, history: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+        if not history:
+            return [], False
+
+        selected: list[dict[str, Any]] = []
+        total_bytes = 0
+
+        for event in reversed(history):
+            encoded = json.dumps(event, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+            if selected and (
+                len(selected) >= self._BOOTSTRAP_HISTORY_EVENT_LIMIT
+                or total_bytes + len(encoded) > self._BOOTSTRAP_HISTORY_BYTE_LIMIT
+            ):
+                break
+            selected.append(event)
+            total_bytes += len(encoded)
+
+        selected.reverse()
+        history_truncated = len(selected) != len(history)
+        return selected, history_truncated
 
     # ------------------------------------------------------------------
     # Agent creation
@@ -225,6 +307,44 @@ class SessionManager:
             log.warning("hooks_init_failed", session_id=session_id, error=str(exc))
             return None
 
+    def register_session(
+        self,
+        session_id: str,
+        *,
+        cwd: str,
+        mode_id: str | None = None,
+        model_id: str | None = None,
+    ) -> tuple[str, str]:
+        persisted = self._load_record(session_id, cwd=cwd)
+        mode = mode_id or (persisted.get("mode") if persisted else DEFAULT_MODES.current_mode_id) or DEFAULT_MODES.current_mode_id
+        resolved_model_id = (persisted.get("model") if persisted else None) or model_id or self._settings.llm_model
+
+        self._cwds[session_id] = cwd
+        self._modes[session_id] = mode
+        self._models[session_id] = resolved_model_id
+
+        record = self._ensure_record(session_id, cwd=cwd, mode_id=mode, model_id=resolved_model_id)
+        record["cwd"] = cwd
+        record["mode"] = mode
+        record["model"] = resolved_model_id
+        self._save_record(session_id)
+        return mode, resolved_model_id
+
+    def _ensure_session_runtime(self, session_id: str, *, cwd: str) -> HookManager | None:
+        hook_manager = self._hook_managers.get(session_id)
+        if session_id in self._runtime_ready:
+            return hook_manager
+
+        hook_manager = hook_manager or self._create_hook_manager(session_id, cwd)
+        if hook_manager is not None:
+            hook_manager.run_hooks(HookEvent.SESSION_START)
+
+        if session_id not in self._cost_callbacks:
+            self._create_cost_callback(session_id)
+
+        self._runtime_ready.add(session_id)
+        return hook_manager
+
     def create_session(
         self,
         session_id: str,
@@ -232,16 +352,9 @@ class SessionManager:
         cwd: str,
         mode_id: str | None = None,
     ) -> CompiledStateGraph:
-        persisted = self._load_record(session_id, cwd=cwd)
-        mode = mode_id or (persisted.get("mode") if persisted else DEFAULT_MODES.current_mode_id) or DEFAULT_MODES.current_mode_id
-        model_id = (persisted.get("model") if persisted else None) or self._settings.llm_model
+        mode, model_id = self.register_session(session_id, cwd=cwd, mode_id=mode_id)
         extra_tools, extra_prompt = self._collect_extra_tools(cwd)
-
-        hook_manager = self._create_hook_manager(session_id, cwd)
-        if hook_manager is not None:
-            hook_manager.run_hooks(HookEvent.SESSION_START)
-
-        self._create_cost_callback(session_id)
+        hook_manager = self._ensure_session_runtime(session_id, cwd=cwd)
 
         agent = build_agent(
             settings=self._settings,
@@ -254,14 +367,6 @@ class SessionManager:
             hook_manager=hook_manager,
         )
         self._agents[session_id] = agent
-        self._cwds[session_id] = cwd
-        self._modes[session_id] = mode
-        self._models[session_id] = model_id
-        record = self._ensure_record(session_id, cwd=cwd, mode_id=mode, model_id=model_id)
-        record["cwd"] = cwd
-        record["mode"] = mode
-        record["model"] = model_id
-        self._save_record(session_id)
         return agent
 
     def get_agent(self, session_id: str) -> CompiledStateGraph | None:
@@ -273,11 +378,21 @@ class SessionManager:
             agent = self.create_session(session_id, cwd=cwd, mode_id=self._modes.get(session_id))
         return agent
 
+    def warm_session(self, session_id: str, *, cwd: str) -> CompiledStateGraph:
+        self.register_session(session_id, cwd=cwd)
+        return self.get_or_create_agent(session_id, cwd=cwd)
+
     def set_mode(self, session_id: str, mode_id: str) -> None:
         cwd = self._cwds.get(session_id, ".")
         self._modes[session_id] = mode_id
+        record = self._ensure_record(session_id, cwd=cwd, mode_id=mode_id, model_id=self.get_model(session_id))
+        record["mode"] = mode_id
+        self._save_record(session_id)
+        if session_id not in self._agents:
+            return
+
         extra_tools, extra_prompt = self._collect_extra_tools(cwd)
-        hook_manager = self._hook_managers.get(session_id)
+        hook_manager = self._ensure_session_runtime(session_id, cwd=cwd)
         self._agents[session_id] = build_agent(
             settings=self._settings,
             cwd=cwd,
@@ -288,16 +403,19 @@ class SessionManager:
             extra_prompt=extra_prompt or None,
             hook_manager=hook_manager,
         )
-        record = self._ensure_record(session_id, cwd=cwd, mode_id=mode_id, model_id=self.get_model(session_id))
-        record["mode"] = mode_id
-        self._save_record(session_id)
 
     def set_model(self, session_id: str, model_id: str) -> None:
         cwd = self._cwds.get(session_id, ".")
         mode = self._modes.get(session_id, DEFAULT_MODES.current_mode_id)
         self._models[session_id] = model_id
+        record = self._ensure_record(session_id, cwd=cwd, mode_id=mode, model_id=model_id)
+        record["model"] = model_id
+        self._save_record(session_id)
+        if session_id not in self._agents:
+            return
+
         extra_tools, extra_prompt = self._collect_extra_tools(cwd)
-        hook_manager = self._hook_managers.get(session_id)
+        hook_manager = self._ensure_session_runtime(session_id, cwd=cwd)
         self._agents[session_id] = build_agent(
             settings=self._settings,
             cwd=cwd,
@@ -308,9 +426,6 @@ class SessionManager:
             extra_prompt=extra_prompt or None,
             hook_manager=hook_manager,
         )
-        record = self._ensure_record(session_id, cwd=cwd, mode_id=mode, model_id=model_id)
-        record["model"] = model_id
-        self._save_record(session_id)
 
     def update_config(self, session_id: str, config_id: str, value: Any) -> None:
         record = self._load_record(session_id)
@@ -380,12 +495,17 @@ class SessionManager:
                 hook_manager.run_hooks(HookEvent.SESSION_END)
             except Exception:
                 pass
+        self.flush_session(session_id)
         self._agents.pop(session_id, None)
         self._cwds.pop(session_id, None)
         self._modes.pop(session_id, None)
         self._models.pop(session_id, None)
+        self._runtime_ready.discard(session_id)
         self._cost_trackers.pop(session_id, None)
         self._cost_callbacks.pop(session_id, None)
+        self._dirty_sessions.discard(session_id)
+        self._buffered_event_counts.pop(session_id, None)
+        self._last_persist_at.pop(session_id, None)
 
     def get_hook_manager(self, session_id: str) -> HookManager | None:
         return self._hook_managers.get(session_id)

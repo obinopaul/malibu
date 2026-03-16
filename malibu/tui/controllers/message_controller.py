@@ -26,8 +26,17 @@ class MessageController:
         return len(self._queue)
 
     async def submit(self, text: str) -> None:
+        if self.screen.input_locked:
+            self.screen.conversation.add_system_message(
+                "Resolve the current action-required prompt before sending another message.",
+                title="Action Required",
+                border_style="#C25B4B",
+            )
+            return
+
+        expect_remote_echo = not self.screen.is_local_command(text)
         if not self.screen.shell_ready:
-            self.screen.record_local_submission(text)
+            self.screen.record_local_submission(text, expect_remote_echo=expect_remote_echo)
             self._queue.append((text, True))
             self.screen.update_queue_depth(self.queue_depth)
             self.screen.conversation.add_system_message(
@@ -59,14 +68,17 @@ class MessageController:
     async def _dispatch(self, text: str, *, local_echoed: bool) -> None:
         self._busy = True
         self.screen.update_queue_depth(self.queue_depth)
+        track_processing = not self.screen.is_local_command(text)
         if not local_echoed:
-            self.screen.record_local_submission(text)
-        self.screen.start_processing("Waiting for agent")
+            self.screen.record_local_submission(text, expect_remote_echo=track_processing)
+        if track_processing:
+            self.screen.start_processing("Preparing agent")
         try:
             await self.screen.dispatch_prompt(text)
         finally:
             self._busy = False
-            self.screen.stop_processing()
+            if track_processing:
+                self.screen.stop_processing()
             self.screen.update_queue_depth(self.queue_depth)
             if self._queue:
                 next_text, next_local_echoed = self._queue.popleft()

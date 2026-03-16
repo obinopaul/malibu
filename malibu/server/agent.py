@@ -114,7 +114,7 @@ class MalibuAgent(ACPAgent):
         **kwargs: Any,
     ) -> NewSessionResponse:
         session_id = uuid4().hex
-        self._session_mgr.create_session(session_id, cwd=cwd, mode_id=DEFAULT_MODES.current_mode_id)
+        self._session_mgr.register_session(session_id, cwd=cwd, mode_id=DEFAULT_MODES.current_mode_id)
         return NewSessionResponse(session_id=session_id, modes=DEFAULT_MODES)
 
     async def load_session(
@@ -124,8 +124,7 @@ class MalibuAgent(ACPAgent):
         mcp_servers: list[HttpMcpServer | SseMcpServer | McpServerStdio] | None = None,
         **kwargs: Any,
     ) -> LoadSessionResponse | None:
-        if self._session_mgr.get_agent(session_id) is None:
-            self._session_mgr.create_session(session_id, cwd=cwd)
+        self._session_mgr.register_session(session_id, cwd=cwd)
         return LoadSessionResponse(modes=DEFAULT_MODES)
 
     async def list_sessions(
@@ -219,7 +218,6 @@ class MalibuAgent(ACPAgent):
         **kwargs: Any,
     ) -> PromptResponse:
         cwd = self._session_mgr.get_cwd(session_id)
-        agent = self._session_mgr.get_or_create_agent(session_id, cwd=cwd)
         self._cancelled[session_id] = False
 
         user_text = self._extract_prompt_text(prompt)
@@ -232,6 +230,19 @@ class MalibuAgent(ACPAgent):
                 ),
             )
             self._maybe_set_session_title(session_id, user_text)
+
+        agent_ready = self._session_mgr.get_agent(session_id) is not None
+        await self._emit_status(
+            session_id,
+            "starting",
+            "Dispatching prompt" if agent_ready else "Preparing agent",
+            details=(
+                "Running the prompt with the warmed session."
+                if agent_ready
+                else "Loading model, tools, and session state before the first response."
+            ),
+        )
+        agent = self._session_mgr.get_or_create_agent(session_id, cwd=cwd)
 
         content_blocks: list[dict[str, Any]] = []
         for block in prompt:
@@ -246,6 +257,13 @@ class MalibuAgent(ACPAgent):
         current_state = None
         resume_payload: Any | None = None
 
+        await self._emit_status(
+            session_id,
+            "starting",
+            "Waiting for agent",
+            details="Waiting for the first agent event...",
+        )
+
         try:
             return await self._prompt_loop(
                 agent=agent,
@@ -256,11 +274,25 @@ class MalibuAgent(ACPAgent):
                 resume_payload=resume_payload,
                 current_state=current_state,
             )
-        except RequestError:
+        except RequestError as exc:
+            await self._emit_status(
+                session_id,
+                "error",
+                "Agent error",
+                details=str(exc),
+            )
             raise
         except Exception as exc:
             log.error("prompt_error", session_id=session_id, error=str(exc))
+            await self._emit_status(
+                session_id,
+                "error",
+                "Agent error",
+                details=str(exc),
+            )
             raise RequestError(-32603, f"Agent error: {exc}") from exc
+        finally:
+            self._session_mgr.flush_session(session_id)
 
     async def _prompt_loop(
         self,
@@ -275,6 +307,12 @@ class MalibuAgent(ACPAgent):
     ) -> PromptResponse:
         while current_state is None or current_state.interrupts:
             if self._cancelled.pop(session_id, False):
+                await self._emit_status(
+                    session_id,
+                    "cancelled",
+                    "Run cancelled",
+                    details="The current run was cancelled.",
+                )
                 return PromptResponse(stop_reason="cancelled")
 
             input_data = (
@@ -295,6 +333,12 @@ class MalibuAgent(ACPAgent):
 
                 namespace, stream_mode, data = stream_chunk
                 if self._cancelled.pop(session_id, False):
+                    await self._emit_status(
+                        session_id,
+                        "cancelled",
+                        "Run cancelled",
+                        details="The current run was cancelled.",
+                    )
                     return PromptResponse(stop_reason="cancelled")
 
                 if stream_mode == "updates":
@@ -308,12 +352,22 @@ class MalibuAgent(ACPAgent):
                         if node_name == "tools" and isinstance(update, dict) and "todos" in update:
                             todos = update.get("todos", [])
                             if todos:
+                                await self._emit_status(
+                                    session_id,
+                                    "planning",
+                                    "Updating plan",
+                                )
                                 await self._emit_session_update(session_id, build_plan_update(todos))
                     continue
 
                 message_chunk, _metadata = data
                 new_starts = accumulator.process_chunk(message_chunk)
                 for tool_start in new_starts:
+                    await self._emit_status(
+                        session_id,
+                        "tool_running",
+                        tool_start.title or "Running tool",
+                    )
                     await self._emit_session_update(session_id, tool_start)
                     info = accumulator.active.get(tool_start.tool_call_id, {})
                     if info.get("name") == "write_todos":
@@ -351,6 +405,7 @@ class MalibuAgent(ACPAgent):
             current_state = await agent.aget_state(config)
 
         self._cancelled.pop(session_id, None)
+        await self._emit_status(session_id, "idle", "Ready")
         return PromptResponse(stop_reason="end_turn")
 
     async def fork_session(
@@ -371,12 +426,17 @@ class MalibuAgent(ACPAgent):
         mcp_servers: list[HttpMcpServer | SseMcpServer | McpServerStdio] | None = None,
         **kwargs: Any,
     ) -> ResumeSessionResponse:
-        if self._session_mgr.get_agent(session_id) is None:
-            self._session_mgr.create_session(session_id, cwd=cwd)
+        self._session_mgr.register_session(session_id, cwd=cwd)
         return ResumeSessionResponse(modes=DEFAULT_MODES)
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
         self._cancelled[session_id] = True
+        await self._emit_status(
+            session_id,
+            "cancelled",
+            "Cancelling run",
+            details="The current run is being cancelled.",
+        )
 
     async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         return await self._extensions.handle_method(method, params)
@@ -392,13 +452,42 @@ class MalibuAgent(ACPAgent):
         self._session_mgr.record_session_update(session_id, update)
         await self._conn.session_update(session_id=session_id, update=update, source="Malibu")
 
-    async def _emit_tui_event(self, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    async def _emit_tui_event(
+        self,
+        session_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        record: bool = True,
+    ) -> None:
         params = build_tui_event(session_id, event_type, payload)
-        self._session_mgr.record_tui_event(session_id, params)
+        if record:
+            self._session_mgr.record_tui_event(session_id, params)
         try:
             await self._conn.ext_notification(TUI_EVENT_NOTIFICATION, params)
         except Exception:
             pass
+
+    async def _emit_status(
+        self,
+        session_id: str,
+        phase: str,
+        label: str,
+        *,
+        lock_input: bool = False,
+        details: str = "",
+    ) -> None:
+        await self._emit_tui_event(
+            session_id,
+            "status",
+            {
+                "phase": phase,
+                "label": label,
+                "lock_input": lock_input,
+                "details": details,
+            },
+            record=False,
+        )
 
     async def _send_text(self, session_id: str, text: str) -> None:
         await self._emit_session_update(session_id, update_agent_message(text_block(text)))
@@ -410,6 +499,13 @@ class MalibuAgent(ACPAgent):
         for interrupt in current_state.interrupts:
             value = interrupt.value
             if isinstance(value, dict) and value.get("type") == "ask_user":
+                await self._emit_status(
+                    session_id,
+                    "waiting_user",
+                    "User input required",
+                    lock_input=True,
+                    details="Answer the active question to continue.",
+                )
                 response = await self._conn.ext_method(
                     TUI_INTERRUPT_METHOD,
                     {
@@ -422,6 +518,12 @@ class MalibuAgent(ACPAgent):
                         },
                     },
                 )
+                await self._emit_status(
+                    session_id,
+                    "starting",
+                    "Resuming run",
+                    details="Processing your answers.",
+                )
                 return response
 
             if not isinstance(value, dict):
@@ -430,6 +532,7 @@ class MalibuAgent(ACPAgent):
             action_requests = value.get("action_requests", [])
             review_configs = value.get("review_configs", [])
             decisions: list[dict[str, Any]] = []
+            prompted = False
 
             for index, action in enumerate(action_requests):
                 tool_name = action.get("name", "tool")
@@ -444,6 +547,13 @@ class MalibuAgent(ACPAgent):
                 if tool_name == "write_todos":
                     todos = tool_args.get("todos", [])
                     await self._send_text(session_id, format_plan_text(todos))
+                    await self._emit_status(
+                        session_id,
+                        "waiting_approval",
+                        "Review plan",
+                        lock_input=True,
+                        details="Approve the proposed plan or request a revision.",
+                    )
                     prompt = {
                         "type": "plan_review",
                         "title": "Review plan",
@@ -463,7 +573,15 @@ class MalibuAgent(ACPAgent):
                         "can_always_allow": True,
                         "cwd": self._session_mgr.get_cwd(session_id),
                     }
+                    await self._emit_status(
+                        session_id,
+                        "waiting_approval",
+                        str(prompt["title"]),
+                        lock_input=True,
+                        details=f"{tool_name} needs approval before Malibu can continue.",
+                    )
 
+                prompted = True
                 response = await self._conn.ext_method(
                     TUI_INTERRUPT_METHOD,
                     {
@@ -487,6 +605,13 @@ class MalibuAgent(ACPAgent):
 
                 decisions.append(decision)
 
+            if prompted:
+                await self._emit_status(
+                    session_id,
+                    "starting",
+                    "Resuming run",
+                    details="Processing the approval response.",
+                )
             return {"decisions": decisions}
 
         return None
@@ -535,10 +660,9 @@ class MalibuAgent(ACPAgent):
         cwd = params.get("cwd", ".")
         if not session_id:
             raise RequestError(-32602, "session_id is required")
-        if self._session_mgr.get_agent(session_id) is None:
-            self._session_mgr.create_session(session_id, cwd=cwd)
+        self._session_mgr.warm_session(session_id, cwd=cwd)
         payload = self._session_mgr.get_bootstrap_payload(session_id)
-        payload["sessions"] = self._session_mgr.list_session_records(cwd=cwd)
+        payload["sessions"] = self._session_mgr.list_session_summaries(cwd=cwd)
         payload["models"] = [self._session_mgr.get_model(session_id)]
         payload["available_commands"] = []
         return payload

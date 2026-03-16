@@ -6,9 +6,12 @@ The complex prompt() method is tested at integration level.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from acp.schema import TextContentBlock
 
 from malibu.config import Settings
 from malibu.server.agent import MalibuAgent
@@ -31,6 +34,7 @@ def mock_conn():
     conn = MagicMock()
     conn.session_update = AsyncMock()
     conn.request_permission = AsyncMock()
+    conn.ext_notification = AsyncMock()
     return conn
 
 
@@ -38,8 +42,16 @@ def mock_conn():
 def agent(settings, mock_conn):
     with patch("malibu.server.agent.SessionManager") as MockSessionMgr:
         mock_session_mgr = MockSessionMgr.return_value
+        mock_session_mgr.register_session = MagicMock()
         mock_session_mgr.create_session = MagicMock()
         mock_session_mgr.get_agent = MagicMock(return_value=None)
+        mock_session_mgr.get_or_create_agent = MagicMock()
+        mock_session_mgr.get_bootstrap_payload = MagicMock(return_value={"session_title": "Session test"})
+        mock_session_mgr.get_callbacks = MagicMock(return_value=[])
+        mock_session_mgr.list_session_summaries = MagicMock(return_value=[])
+        mock_session_mgr.get_model = MagicMock(return_value="openai:gpt-4o-mini")
+        mock_session_mgr.flush_session = MagicMock()
+        mock_session_mgr.warm_session = MagicMock()
         mock_session_mgr.get_cwd = MagicMock(return_value=".")
         mock_session_mgr.set_mode = MagicMock()
         mock_session_mgr.set_model = MagicMock()
@@ -73,8 +85,8 @@ class TestNewSession:
 
     async def test_new_session_creates_in_session_mgr(self, agent):
         await agent.new_session(cwd="/work")
-        agent._session_mgr.create_session.assert_called_once()
-        call_args = agent._session_mgr.create_session.call_args
+        agent._session_mgr.register_session.assert_called_once()
+        call_args = agent._session_mgr.register_session.call_args
         assert call_args.kwargs["cwd"] == "/work"
 
 
@@ -82,6 +94,7 @@ class TestLoadSession:
     async def test_load_session_returns_modes(self, agent):
         resp = await agent.load_session(cwd="/work", session_id="test-sess")
         assert resp.modes is not None
+        agent._session_mgr.register_session.assert_called_once_with("test-sess", cwd="/work")
 
     async def test_load_session_existing(self, agent):
         agent._session_mgr.get_agent.return_value = MagicMock()
@@ -157,6 +170,7 @@ class TestResumeSession:
     async def test_resume_session_returns_modes(self, agent):
         resp = await agent.resume_session(cwd="/work", session_id="existing")
         assert resp.modes is not None
+        agent._session_mgr.register_session.assert_called_once_with("existing", cwd="/work")
 
 
 class TestExtMethod:
@@ -171,6 +185,52 @@ class TestExtNotification:
         agent._extensions.handle_notification = AsyncMock()
         await agent.ext_notification("custom.notify", {"key": "val"})
         agent._extensions.handle_notification.assert_called_once()
+
+
+class TestPrompt:
+    async def test_prompt_emits_user_echo_before_agent_creation(self, agent):
+        call_order: list[str] = []
+        fake_graph = MagicMock()
+
+        def _get_or_create(*args, **kwargs):
+            call_order.append("get_or_create_agent")
+            return fake_graph
+
+        async def _emit_session_update(session_id, update):
+            call_order.append(update.session_update)
+
+        async def _emit_status(session_id, phase, label, **kwargs):
+            call_order.append(f"status:{label}")
+
+        async def _prompt_loop(**kwargs):
+            call_order.append("prompt_loop")
+            return SimpleNamespace(stop_reason="end_turn")
+
+        agent._session_mgr.get_or_create_agent.side_effect = _get_or_create
+        agent._emit_session_update = AsyncMock(side_effect=_emit_session_update)
+        agent._emit_status = AsyncMock(side_effect=_emit_status)
+        agent._prompt_loop = AsyncMock(side_effect=_prompt_loop)
+
+        await agent.prompt(
+            prompt=[TextContentBlock(type="text", text="hello world")],
+            session_id="session-1",
+        )
+
+        assert call_order[:3] == [
+            "user_message_chunk",
+            "status:Preparing agent",
+            "get_or_create_agent",
+        ]
+        agent._session_mgr.flush_session.assert_called_once_with("session-1")
+
+
+class TestBootstrapWarmup:
+    async def test_tui_bootstrap_warms_session_before_payload(self, agent):
+        result = await agent._ext_tui_bootstrap({"session_id": "session-1", "cwd": "/work"})
+
+        agent._session_mgr.warm_session.assert_called_once_with("session-1", cwd="/work")
+        agent._session_mgr.get_bootstrap_payload.assert_called_once_with("session-1")
+        assert result["models"] == ["openai:gpt-4o-mini"]
 
 
 class TestExtractText:

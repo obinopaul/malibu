@@ -90,6 +90,9 @@ class ChatTextArea(TextArea):
         if self._should_insert_newline(event):
             return
 
+        if self.text.lstrip().startswith("/") and event.key in {"tab", "enter", "return"}:
+            self._ensure_completion_rows()
+
         if self._completion_rows and event.key in {"up", "down"} and not self.text.strip().count("\n"):
             event.prevent_default()
             event.stop()
@@ -102,11 +105,19 @@ class ChatTextArea(TextArea):
             self._accept_completion()
             return
 
+        if self._completion_rows and self._is_submit_key(event) and self._should_accept_completion_on_submit():
+            event.prevent_default()
+            event.stop()
+            self._accept_completion()
+            return
+
         if self._is_submit_key(event):
             event.prevent_default()
             event.stop()
             text = self.text.strip()
             if not text:
+                return
+            if text == "/":
                 return
             resolved = self.resolve_large_pastes(text)
             if self._history is not None:
@@ -168,15 +179,25 @@ class ChatTextArea(TextArea):
             self._completion_timer.stop()
         self._completion_timer = self.set_timer(0.08, self._refresh_completions)
 
+    def _ensure_completion_rows(self) -> None:
+        if self._completion_timer is not None:
+            self._completion_timer.stop()
+            self._completion_timer = None
+        self._refresh_completions()
+
     def _refresh_completions(self) -> None:
         self._completion_timer = None
         if self._completion_provider is None or not self.text:
             self._clear_completions()
             return
         cursor = self.document.get_index_from_location(self.cursor_location)
+        previous: CompletionItem | None = None
+        if self._completion_rows and self._selected_completion is not None:
+            if 0 <= self._selected_completion < len(self._completion_rows):
+                previous = self._completion_rows[self._selected_completion]
         rows = self._completion_provider(self.text, cursor)
         self._completion_rows = rows
-        self._selected_completion = 0 if rows else None
+        self._selected_completion = self._resolve_selected_completion(rows, previous)
         self._emit_completions()
 
     def _move_completion(self, delta: int) -> None:
@@ -185,6 +206,15 @@ class ChatTextArea(TextArea):
         current = self._selected_completion or 0
         self._selected_completion = (current + delta) % len(self._completion_rows)
         self._emit_completions()
+
+    def set_selected_completion(self, index: int) -> None:
+        if not self._completion_rows:
+            return
+        self._selected_completion = max(0, min(index, len(self._completion_rows) - 1))
+        self._emit_completions()
+
+    def accept_selected_completion(self) -> None:
+        self._accept_completion()
 
     def _accept_completion(self) -> None:
         if self._selected_completion is None or not self._completion_rows:
@@ -204,6 +234,28 @@ class ChatTextArea(TextArea):
         self._completion_rows = []
         self._selected_completion = None
         self.post_message(self.CompletionsChanged([], None))
+
+    @staticmethod
+    def _resolve_selected_completion(
+        rows: list[CompletionItem],
+        previous: CompletionItem | None,
+    ) -> int | None:
+        if not rows:
+            return None
+        if previous is None:
+            return 0
+        for index, item in enumerate(rows):
+            if item.label == previous.label and item.value == previous.value:
+                return index
+        return 0
+
+    def _should_accept_completion_on_submit(self) -> bool:
+        if not self._completion_rows or self._selected_completion is None:
+            return False
+        if not self.text.lstrip().startswith("/"):
+            return False
+        selected = self._completion_rows[self._selected_completion]
+        return self.text.strip() != selected.value.strip()
 
 
 class ChatInput(ChatTextArea):

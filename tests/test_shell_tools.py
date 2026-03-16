@@ -8,7 +8,12 @@ from malibu.config import get_settings
 
 
 def _shell_tool_map(cwd: Path) -> dict[str, object]:
-    tools = build_default_tools(settings=get_settings(), cwd=cwd, session_id="shell-test")
+    tools = build_default_tools(
+        settings=get_settings(),
+        cwd=cwd,
+        session_id="shell-test",
+        tool_profile="full",
+    )
     return {tool.name: tool for tool in tools}
 
 

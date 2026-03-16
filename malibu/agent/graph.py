@@ -67,10 +67,11 @@ def build_agent(
         A compiled graph ready for streaming.
     """
     # Resolve model — either model string or a ChatModel instance
-    model: str | BaseChatModel = model_id or settings.llm_model
+    resolved_model = model_id or settings.llm_model
+    model: str | BaseChatModel = resolved_model
     if settings.llm_api_key or settings.llm_base_url:
         # Need a model instance for custom API key / base URL
-        model = settings.create_llm()
+        model = settings.create_llm(resolved_model)
 
     # Build system prompt with optional local context
     extra_context = load_local_context(cwd)

@@ -3,14 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from textual import events
 from textual.app import App, ComposeResult
 
 from acp.schema import AgentMessageChunk, TextContentBlock, UserMessageChunk
 
 from malibu.tui.commands import create_default_registry
+from malibu.tui.managers import RunPhase
 from malibu.tui.screens.chat import ChatScreen
+from malibu.tui.widgets.autocomplete_popup import AutocompletePopup
 from malibu.tui.widgets.chat_input import ChatTextArea
-from malibu.tui.widgets.conversation.blocks import WelcomeMessageBlock
+from malibu.tui.widgets.conversation.blocks import (
+    SystemMessageBlock,
+    UserMessageBlock,
+    WelcomeMessageBlock,
+)
 from malibu.tui.widgets.plan_panel import PlanPanel
 
 
@@ -51,6 +58,33 @@ async def test_chat_screen_dispatches_prompt(tmp_path: Path) -> None:
         await pilot.pause()
         assert app.dispatched == ["hello world"]
         assert len(screen.conversation.children) >= 1
+
+
+async def test_chat_screen_dedupes_remote_user_echo_after_local_submit(tmp_path: Path) -> None:
+    app = ShellHarness(tmp_path)
+    async with app.run_test() as pilot:
+        screen = app.query_one(ChatScreen)
+
+        screen.handle_chat_submitted(ChatTextArea.Submitted("hello"))
+        await pilot.pause()
+
+        before_echo = [
+            child for child in screen.conversation.children if isinstance(child, UserMessageBlock)
+        ]
+        assert len(before_echo) == 1
+
+        screen.on_user_message_chunk(
+            UserMessageChunk(
+                session_update="user_message_chunk",
+                content=TextContentBlock(type="text", text="hello"),
+            )
+        )
+        await pilot.pause()
+
+        after_echo = [
+            child for child in screen.conversation.children if isinstance(child, UserMessageBlock)
+        ]
+        assert len(after_echo) == 1
 
 
 async def test_chat_screen_welcome_dock_hides_after_activity(tmp_path: Path) -> None:
@@ -221,3 +255,89 @@ async def test_chat_screen_mode_completion_returns_real_modes(tmp_path: Path) ->
         assert "ask_before_edits" in labels
         assert "accept_edits" in labels
         assert "accept_everything" in labels
+
+
+async def test_chat_screen_enter_accepts_selected_slash_completion(tmp_path: Path) -> None:
+    app = ShellHarness(tmp_path)
+    async with app.run_test() as pilot:
+        screen = app.query_one(ChatScreen)
+        screen.chat_input.load_text("/mod")
+        screen.chat_input.cursor_location = screen.chat_input.document.get_location_from_index(
+            len(screen.chat_input.text)
+        )
+        screen.chat_input._refresh_completions()
+        await pilot.pause()
+
+        await screen.chat_input._on_key(events.Key("enter", None))
+        await pilot.pause()
+
+        assert app.dispatched == []
+        assert screen.chat_input.text == "/mode "
+
+
+async def test_chat_screen_clicking_popup_changes_selected_completion(tmp_path: Path) -> None:
+    app = ShellHarness(tmp_path)
+    async with app.run_test() as pilot:
+        screen = app.query_one(ChatScreen)
+        screen.chat_input.load_text("/mod")
+        screen.chat_input.cursor_location = screen.chat_input.document.get_location_from_index(
+            len(screen.chat_input.text)
+        )
+        screen.chat_input._refresh_completions()
+        await pilot.pause()
+
+        screen.handle_completion_selection_requested(AutocompletePopup.SelectionRequested(1))
+        await screen.chat_input._on_key(events.Key("enter", None))
+        await pilot.pause()
+
+        assert app.dispatched == []
+        assert screen.chat_input.text == "/model "
+
+
+async def test_chat_screen_status_event_locks_and_unlocks_input(tmp_path: Path) -> None:
+    app = ShellHarness(tmp_path)
+    async with app.run_test() as pilot:
+        screen = app.query_one(ChatScreen)
+
+        screen.on_status_event(
+            {
+                "phase": "waiting_approval",
+                "label": "Review plan",
+                "lock_input": True,
+                "details": "Action required",
+            }
+        )
+        await pilot.pause()
+
+        assert screen.input_locked is True
+        assert screen.chat_input.disabled is True
+        assert screen.conversation._activity_block is not None
+        assert screen.conversation._activity_block.phase is RunPhase.WAITING_APPROVAL
+
+        screen.on_status_event(
+            {
+                "phase": "starting",
+                "label": "Resuming run",
+                "lock_input": False,
+            }
+        )
+        await pilot.pause()
+
+        assert screen.input_locked is False
+        assert screen.chat_input.disabled is False
+
+
+async def test_chat_screen_blocks_submission_while_action_required(tmp_path: Path) -> None:
+    app = ShellHarness(tmp_path)
+    async with app.run_test() as pilot:
+        screen = app.query_one(ChatScreen)
+        screen.set_input_locked(True, "Action required")
+
+        screen.handle_chat_submitted(ChatTextArea.Submitted("hello again"))
+        await pilot.pause()
+
+        assert app.dispatched == []
+        notices = [
+            child for child in screen.conversation.children if isinstance(child, SystemMessageBlock)
+        ]
+        assert any(block._title == "Action Required" for block in notices)

@@ -263,14 +263,17 @@ class TestWriteTodos:
 def test_all_tools_contains_expected():
     names = {t.name for t in ALL_TOOLS}
     # Core tools are always present
-    core = {"read_file", "write_file", "edit_file", "ls", "grep", "execute", "write_todos"}
+    core = {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "ls",
+        "grep",
+        "execute",
+        "apply_patch",
+        "ast_grep",
+        "str_replace",
+        "lsp",
+        "write_todos",
+    }
     assert core.issubset(names), f"Missing core tools: {core - names}"
-
-    # Git tools are conditionally present (only when git is installed)
-    import shutil
-    if shutil.which("git"):
-        git_tools = {
-            "git_status", "git_diff", "git_log", "git_commit",
-            "git_worktree_create", "git_worktree_list", "git_worktree_remove",
-        }
-        assert git_tools.issubset(names), f"Missing git tools: {git_tools - names}"

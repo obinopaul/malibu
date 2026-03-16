@@ -1,12 +1,12 @@
-"""Inline controller for reviewing `write_todos` plans."""
+"""Modal controller for reviewing `write_todos` plans."""
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from malibu.tui.managers.interrupt_manager import InterruptKind, InterruptManager
-from malibu.tui.widgets.conversation.blocks import InlineDecisionBlock
+from malibu.tui.managers.run_state import RunPhase
+from malibu.tui.screens.interrupt_prompt import ReviewPromptScreen
 
 
 class PlanApprovalController:
@@ -15,77 +15,78 @@ class PlanApprovalController:
     def __init__(self, screen: Any, interrupt_manager: InterruptManager) -> None:
         self.screen = screen
         self.interrupt_manager = interrupt_manager
-        self._future: asyncio.Future[dict[str, Any]] | None = None
-        self._block: InlineDecisionBlock | None = None
+        self._active = False
 
     @property
     def active(self) -> bool:
-        return self._future is not None and not self._future.done()
+        return self._active
 
     async def start(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.active:
+            raise RuntimeError("plan review prompt already active")
+
+        self._active = True
+        self.interrupt_manager.enter(InterruptKind.PLAN_REVIEW, payload, controller=self)
         todos = payload.get("todos", [])
         body = "\n".join(
             f"{index + 1}. {todo.get('content', '')} [{todo.get('status', 'pending')}]"
             for index, todo in enumerate(todos)
         ) or "No plan entries were provided."
-        self._block = InlineDecisionBlock(
+
+        block = self.screen.conversation.add_interrupt_status(
             title="Review plan",
-            subtitle="Approve to continue or reject to request a revision.",
+            subtitle="Approve to continue or request a revision.",
             body=body,
-            options=[("approve", "Approve"), ("reject", "Request revision"), ("always_allow", "Always allow plan updates")],
+            state="waiting",
+            detail="Awaiting plan approval",
         )
-        self.screen.conversation.render_inline_prompt(self._block)
-        self.interrupt_manager.enter(InterruptKind.PLAN_REVIEW, payload, controller=self)
-        self._future = asyncio.get_running_loop().create_future()
-        return await self._future
+        self.screen.set_run_state(
+            RunPhase.WAITING_APPROVAL,
+            "Review plan",
+            lock_input=True,
+            details="Action required",
+        )
 
-    def handle_key(self, key: str) -> bool:
-        if not self.active or self._block is None:
-            return False
-        if key in {"left", "up", "k"}:
-            self._block.set_selected((self._block.selected_index - 1) % 3)
-            return True
-        if key in {"right", "down", "j"}:
-            self._block.set_selected((self._block.selected_index + 1) % 3)
-            return True
-        if key == "enter":
-            self.confirm()
-            return True
-        if key == "escape":
-            self.cancel()
-            return True
-        return False
-
-    def confirm(self) -> None:
-        if self._future is None or self._future.done() or self._block is None:
-            return
-        option_id = self._block.options[self._block.selected_index][0]
-        if option_id == "always_allow":
-            result = {
-                "decision": {"type": "approve"},
-                "remember": {"type": "always_allow"},
-            }
-        elif option_id == "reject":
-            result = {
-                "decision": {
-                    "type": "reject",
-                    "message": "The user requested a revised plan. Gather feedback and regenerate write_todos.",
+        try:
+            selection = await self.screen.app.push_screen_wait(  # type: ignore[attr-defined]
+                ReviewPromptScreen(
+                    title="Review plan",
+                    subtitle="Approve to continue or request a revision.",
+                    body=body,
+                    options=[
+                        ("approve", "Approve"),
+                        ("reject", "Request revision"),
+                        ("always_allow", "Always allow plan updates"),
+                    ],
+                )
+            )
+            if selection == "always_allow":
+                result = {
+                    "decision": {"type": "approve"},
+                    "remember": {"type": "always_allow"},
                 }
-            }
-        else:
-            result = {"decision": {"type": "approve"}}
-        self._future.set_result(result)
-        self._finish()
+                block.set_state("approved", detail="Approved and remembered")
+            elif selection in {None, "reject"}:
+                message = "The user cancelled the plan review." if selection is None else (
+                    "The user requested a revised plan. Gather feedback and regenerate write_todos."
+                )
+                result = {
+                    "decision": {
+                        "type": "reject",
+                        "message": message,
+                    }
+                }
+                block.set_state("rejected" if selection == "reject" else "cancelled", detail=message)
+            else:
+                result = {"decision": {"type": "approve"}}
+                block.set_state("approved", detail="Plan approved")
 
-    def cancel(self) -> None:
-        if self._future is None or self._future.done():
-            return
-        self._future.set_result(
-            {"decision": {"type": "reject", "message": "The user cancelled the plan review."}}
-        )
-        self._finish()
+            self.screen.set_run_state(RunPhase.STARTING, "Resuming run", lock_input=False)
+            return result
+        finally:
+            self._finish()
 
     def _finish(self) -> None:
-        self.screen.conversation.clear_inline_prompt()
         self.interrupt_manager.clear()
-        self._block = None
+        self.screen.set_input_locked(False)
+        self._active = False

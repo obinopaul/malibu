@@ -7,7 +7,7 @@ import pytest
 
 from malibu.config import Settings
 from malibu.server.agent import MalibuAgent
-from malibu.tui.protocol import TUI_INTERRUPT_METHOD
+from malibu.tui.protocol import TUI_EVENT_NOTIFICATION, TUI_INTERRUPT_METHOD
 
 
 @pytest.fixture
@@ -58,6 +58,13 @@ async def test_handle_interrupts_uses_tui_interrupt_for_tool_approval(agent: Mal
     assert result == {"decisions": [{"type": "approve"}]}
     agent._conn.ext_method.assert_awaited_once()
     assert agent._conn.ext_method.await_args.args[0] == TUI_INTERRUPT_METHOD
+    assert agent._conn.ext_notification.await_count >= 2
+    notifications = [call.args for call in agent._conn.ext_notification.await_args_list]
+    assert notifications[0][0] == TUI_EVENT_NOTIFICATION
+    assert notifications[0][1]["event_type"] == "status"
+    assert notifications[0][1]["payload"]["phase"] == "waiting_approval"
+    assert notifications[0][1]["payload"]["lock_input"] is True
+    assert notifications[-1][1]["payload"]["phase"] == "starting"
 
 
 async def test_handle_interrupts_returns_ask_user_resume_payload(agent: MalibuAgent) -> None:
@@ -80,3 +87,9 @@ async def test_handle_interrupts_returns_ask_user_resume_payload(agent: MalibuAg
 
     assert result == {"status": "answered", "answers": ["yes"]}
     agent._conn.ext_method.assert_awaited_once()
+    assert agent._conn.ext_notification.await_count >= 2
+    notifications = [call.args for call in agent._conn.ext_notification.await_args_list]
+    assert notifications[0][0] == TUI_EVENT_NOTIFICATION
+    assert notifications[0][1]["payload"]["phase"] == "waiting_user"
+    assert notifications[0][1]["payload"]["lock_input"] is True
+    assert notifications[-1][1]["payload"]["phase"] == "starting"

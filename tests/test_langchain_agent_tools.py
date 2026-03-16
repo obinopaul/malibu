@@ -158,5 +158,17 @@ def test_build_agent_passes_native_tool_bundle_to_deep_agents(
 
     assert agent == "fake-agent"
     tool_names = {tool.name for tool in captured["tools"]}
-    assert {"read_file", "shell_run", "web_search", "write_todos"}.issubset(tool_names)
+    assert {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "ls",
+        "grep",
+        "execute",
+        "apply_patch",
+        "ast_grep",
+        "str_replace",
+        "lsp",
+        "write_todos",
+    }.issubset(tool_names)
     assert captured["system_prompt"] == "system prompt"

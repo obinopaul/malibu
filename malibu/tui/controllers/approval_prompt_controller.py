@@ -1,118 +1,124 @@
-"""Inline tool approval controller."""
+"""Modal tool approval controller."""
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from malibu.tui.managers.interrupt_manager import InterruptKind, InterruptManager
+from malibu.tui.managers.run_state import RunPhase
 from malibu.tui.modals.detail_modal import JsonEditorModal
-from malibu.tui.widgets.conversation.blocks import InlineDecisionBlock
+from malibu.tui.screens.interrupt_prompt import ReviewPromptScreen
 
 
 class ApprovalPromptController:
-    """Render and resolve inline tool approval prompts."""
+    """Render and resolve modal tool approval prompts."""
 
     def __init__(self, screen: Any, interrupt_manager: InterruptManager) -> None:
         self.screen = screen
         self.interrupt_manager = interrupt_manager
-        self._future: asyncio.Future[dict[str, Any]] | None = None
+        self._active = False
         self._payload: dict[str, Any] = {}
-        self._block: InlineDecisionBlock | None = None
-        self._options: list[tuple[str, str]] = []
 
     @property
     def active(self) -> bool:
-        return self._future is not None and not self._future.done()
+        return self._active
 
     async def start(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.active:
             raise RuntimeError("tool approval prompt already active")
+
+        self._active = True
         self._payload = payload
-        self._options = self._build_options(payload)
-        self._block = InlineDecisionBlock(
-            title=str(payload.get("title", payload.get("tool_name", "Tool review"))),
-            subtitle=str(payload.get("subtitle", payload.get("tool_name", ""))),
-            body=self._body_text(payload),
-            options=self._options,
-        )
-        self.screen.conversation.render_inline_prompt(self._block)
         self.interrupt_manager.enter(InterruptKind.TOOL_APPROVAL, payload, controller=self)
-        self._future = asyncio.get_running_loop().create_future()
-        return await self._future
 
-    def handle_key(self, key: str) -> bool:
-        if not self.active or self._block is None:
-            return False
-        if key in {"left", "up", "k"}:
-            self._move(-1)
-            return True
-        if key in {"right", "down", "j"}:
-            self._move(1)
-            return True
-        if key == "enter":
-            self.screen.run_worker(self.confirm())
-            return True
-        if key == "escape":
-            self.cancel()
-            return True
-        return False
+        title = str(payload.get("title", payload.get("tool_name", "Tool review")))
+        subtitle = str(payload.get("subtitle", payload.get("tool_name", "")))
+        body = self._body_text(payload)
+        block = self.screen.conversation.add_interrupt_status(
+            title=title,
+            subtitle=subtitle,
+            body=body,
+            state="waiting",
+            detail="Awaiting approval",
+        )
+        self.screen.set_run_state(
+            RunPhase.WAITING_APPROVAL,
+            title,
+            lock_input=True,
+            details=subtitle or "Action required",
+        )
 
-    def cancel(self) -> None:
-        if self._future is None or self._future.done():
-            return
-        self._future.set_result({"decision": {"type": "reject", "message": "The user cancelled the request."}})
-        self._finish()
+        try:
+            result = await self._prompt_until_resolved(title, subtitle, body)
+            decision_type = result.get("decision", {}).get("type", "approve")
+            state = {
+                "approve": "approved",
+                "edit": "approved",
+                "reject": "rejected",
+            }.get(str(decision_type), "approved")
+            detail = {
+                "approve": "Approved",
+                "edit": "Edited input and approved",
+                "reject": result.get("decision", {}).get("message", "Rejected"),
+            }.get(str(decision_type), "Approved")
+            block.set_state(state, detail=detail)
+            self.screen.set_run_state(RunPhase.STARTING, "Resuming run", lock_input=False)
+            return result
+        finally:
+            self._finish()
 
-    async def confirm(self) -> None:
-        if self._future is None or self._future.done():
-            return
-        option_id = self._options[self._block.selected_index][0]
-        if option_id == "edit":
-            edited = await self.screen.app.push_screen_wait(  # type: ignore[attr-defined]
-                JsonEditorModal(
-                    title=str(self._payload.get("title", "Edit tool input")),
-                    value=self._payload.get("tool_args", {}),
+    async def _prompt_until_resolved(self, title: str, subtitle: str, body: str) -> dict[str, Any]:
+        options = self._build_options(self._payload)
+        while True:
+            option_id = await self.screen.app.push_screen_wait(  # type: ignore[attr-defined]
+                ReviewPromptScreen(
+                    title=title,
+                    subtitle=subtitle or "Review this tool action before continuing.",
+                    body=body,
+                    options=options,
                 )
             )
-            if edited is None:
-                return
-            tool_name = str(self._payload.get("tool_name", "tool"))
-            result = {
-                "decision": {
-                    "type": "edit",
-                    "edited_action": {"name": tool_name, "args": edited},
-                }
-            }
-        elif option_id == "always_allow":
-            result = {
-                "decision": {"type": "approve"},
-                "remember": {"type": "always_allow"},
-            }
-        elif option_id == "reject":
-            result = {
-                "decision": {
-                    "type": "reject",
-                    "message": f"User rejected {self._payload.get('tool_name', 'the tool call')}.",
-                }
-            }
-        else:
-            result = {"decision": {"type": "approve"}}
 
-        self._future.set_result(result)
-        self._finish()
+            if option_id == "edit":
+                edited = await self.screen.app.push_screen_wait(  # type: ignore[attr-defined]
+                    JsonEditorModal(
+                        title=str(self._payload.get("title", "Edit tool input")),
+                        value=self._payload.get("tool_args", {}),
+                    )
+                )
+                if edited is None:
+                    continue
+                tool_name = str(self._payload.get("tool_name", "tool"))
+                return {
+                    "decision": {
+                        "type": "edit",
+                        "edited_action": {"name": tool_name, "args": edited},
+                    }
+                }
 
-    def _move(self, delta: int) -> None:
-        if self._block is None:
-            return
-        count = len(self._options)
-        next_index = (self._block.selected_index + delta) % count
-        self._block.set_selected(next_index)
+            if option_id == "always_allow":
+                return {
+                    "decision": {"type": "approve"},
+                    "remember": {"type": "always_allow"},
+                }
+
+            if option_id in {None, "reject"}:
+                message = "The user cancelled the request." if option_id is None else (
+                    f"User rejected {self._payload.get('tool_name', 'the tool call')}."
+                )
+                return {
+                    "decision": {
+                        "type": "reject",
+                        "message": message,
+                    }
+                }
+
+            return {"decision": {"type": "approve"}}
 
     def _finish(self) -> None:
-        self.screen.conversation.clear_inline_prompt()
         self.interrupt_manager.clear()
-        self._block = None
+        self.screen.set_input_locked(False)
+        self._active = False
         self._payload = {}
 
     @staticmethod
