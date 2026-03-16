@@ -1,4 +1,4 @@
-# Mistral Vibe
+# Malibu
 
 [![PyPI Version](https://img.shields.io/pypi/v/mistral-vibe)](https://pypi.org/project/mistral-vibe)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/release/python-3120/)
@@ -17,12 +17,12 @@
 ██████████████████░░
 ```
 
-**Mistral's open-source CLI coding assistant.**
+**An open-source CLI coding assistant.**
 
-Mistral Vibe is a command-line coding assistant with DeepAgent-style orchestration, provider-configurable models, and a conversational interface to your codebase. It lets you explore, modify, and interact with projects through a powerful set of tools while keeping Vibe's existing CLI, session, and ACP surfaces intact.
+Malibu is a command-line coding assistant with DeepAgent-style orchestration, provider-configurable models, and a conversational interface to your codebase. It lets you explore, modify, and interact with projects through a powerful set of tools while keeping the existing CLI, session, and ACP surfaces intact.
 
 > [!WARNING]
-> Mistral Vibe works on Windows, but we officially support and target UNIX environments.
+> Malibu works on Windows, but we officially support and target UNIX environments.
 
 ### One-line install (recommended)
 
@@ -44,18 +44,18 @@ Then, use uv command below.
 ### Using uv
 
 ```bash
-uv tool install mistral-vibe
+uv tool install malibu
 ```
 
 ### Using pip
 
 ```bash
-pip install mistral-vibe
+pip install malibu
 ```
 
 ## Table of Contents
 
-- [Mistral Vibe](#mistral-vibe)
+- [Malibu](#malibu)
     - [One-line install (recommended)](#one-line-install-recommended)
     - [Using uv](#using-uv)
     - [Using pip](#using-pip)
@@ -188,19 +188,19 @@ Most modern terminals should work, but older or minimal terminal emulators may h
    cd /path/to/your/project
    ```
 
-2. Run Vibe:
+2. Run Malibu:
 
    ```bash
-   vibe
+   malibu
    ```
 
-3. If this is your first time running Vibe, it will:
+3. If this is your first time running Malibu, it will:
 
-  - Create a default configuration file at `~/.vibe/config.toml`
+  - Create a default configuration file at `~/.malibu/config.toml`
   - Prompt you to choose a provider and enter an API key if credentials are not already configured
-  - Save your API key to `~/.vibe/.env` for future use
+  - Save your API key to `~/.malibu/.env` for future use
 
-   Alternatively, you can configure your API key separately using `vibe --setup`.
+   Alternatively, you can configure your API key separately using `malibu --setup`.
 
 4. Start interacting with the agent!
 
@@ -220,7 +220,7 @@ Most modern terminals should work, but older or minimal terminal emulators may h
 
 ### Interactive Mode
 
-Simply run `vibe` to enter the interactive chat loop.
+Simply run `malibu` to enter the interactive chat loop.
 
 - **Multi-line Input**: Press `Ctrl+J` or `Shift+Enter` for select terminals to insert a newline.
 - **File Paths**: Reference files in your prompt using the `@` symbol for smart autocompletion (e.g., `> Read the file @src/agent.py`).
@@ -230,28 +230,28 @@ Simply run `vibe` to enter the interactive chat loop.
 - **Todo View Toggle**: Press `Ctrl+T` to toggle the todo list view.
 - **Auto-Approve Toggle**: Press `Shift+Tab` to toggle auto-approve mode on/off.
 
-You can start Vibe with a prompt using the following command:
+You can start Malibu with a prompt using the following command:
 
 ```bash
-vibe "Refactor the main function in cli/main.py to be more modular."
+malibu "Refactor the main function in cli/main.py to be more modular."
 ```
 
 **Note**: The `--auto-approve` flag automatically approves all tool executions without prompting. In interactive mode, you can also toggle auto-approve on/off using `Shift+Tab`.
 
 ### Trust Folder System
 
-Vibe includes a trust folder system to ensure you only run the agent in directories you trust. When you first run Vibe in a new directory which contains a `.vibe` subfolder, it may ask you to confirm whether you trust the folder.
+Malibu includes a trust folder system to ensure you only run the agent in directories you trust. When you first run Malibu in a new directory which contains a `.malibu` or `.vibe` subfolder, it may ask you to confirm whether you trust the folder.
 
-Trusted folders are remembered for future sessions. You can manage trusted folders through its configuration file `~/.vibe/trusted_folders.toml`.
+Trusted folders are remembered for future sessions. You can manage trusted folders through its configuration file `~/.malibu/trusted_folders.toml`.
 
 This safety feature helps prevent accidental execution in sensitive directories.
 
 ### Programmatic Mode
 
-You can run Vibe non-interactively by piping input or using the `--prompt` flag. This is useful for scripting.
+You can run Malibu non-interactively by piping input or using the `--prompt` flag. This is useful for scripting.
 
 ```bash
-vibe --prompt "Refactor the main function in cli/main.py to be more modular."
+malibu --prompt "Refactor the main function in cli/main.py to be more modular."
 ```
 
 By default, it uses `auto-approve` mode.
@@ -378,17 +378,17 @@ Skills support the same pattern matching as tools (exact names, glob patterns, a
 
 ### Configuration File Location
 
-Vibe is configured via a `config.toml` file. It looks for this file first in `./.vibe/config.toml` and then falls back to `~/.vibe/config.toml`.
+Malibu is configured via a `config.toml` file. It looks for this file first in `./.malibu/config.toml`, then `./.vibe/config.toml`, and then falls back to `~/.malibu/config.toml`.
 
 ### API Key Configuration
 
-Vibe supports multiple model providers. The built-in interactive setup currently includes Mistral, OpenAI, and Anthropic presets and stores their API keys in `~/.vibe/.env`.
+Malibu supports multiple model providers. The built-in interactive setup currently includes Mistral, OpenAI, and Anthropic presets and stores their API keys in `~/.malibu/.env`.
 
-You can configure your API key using `vibe --setup`, or through one of the methods below.
+You can configure your API key using `malibu --setup`, or through one of the methods below.
 
-Vibe supports multiple ways to configure your API keys:
+Malibu supports multiple ways to configure your API keys:
 
-1. **Interactive Setup (Recommended for first-time users)**: When you run Vibe for the first time or if your API key is missing, Vibe will prompt you to enter it. The key will be securely saved to `~/.vibe/.env` for future sessions.
+1. **Interactive Setup (Recommended for first-time users)**: When you run Malibu for the first time or if your API key is missing, Malibu will prompt you to enter it. The key will be securely saved to `~/.malibu/.env` for future sessions.
 
 2. **Environment Variables**: Set your provider API key as an environment variable:
 
@@ -398,7 +398,7 @@ Vibe supports multiple ways to configure your API keys:
    export ANTHROPIC_API_KEY="your_anthropic_api_key"
    ```
 
-3. **`.env` File**: Create a `.env` file in `~/.vibe/` and add your API keys:
+3. **`.env` File**: Create a `.env` file in `~/.malibu/` and add your API keys:
 
    ```bash
    MISTRAL_API_KEY=your_mistral_api_key
@@ -406,13 +406,13 @@ Vibe supports multiple ways to configure your API keys:
    ANTHROPIC_API_KEY=your_anthropic_api_key
    ```
 
-   Vibe automatically loads API keys from `~/.vibe/.env` on startup. Environment variables take precedence over the `.env` file if both are set.
+   Malibu automatically loads API keys from `~/.malibu/.env` on startup. Environment variables take precedence over the `.env` file if both are set.
 
-**Note**: The `.env` file is specifically for API keys and other provider credentials. General Vibe configuration should be done in `config.toml`.
+**Note**: The `.env` file is specifically for API keys and other provider credentials. General Malibu configuration should be done in `config.toml`.
 
 ### Custom System Prompts
 
-You can create custom system prompts to replace the default one (`prompts/cli.md`). Create a markdown file in the `~/.vibe/prompts/` directory with your custom prompt content.
+You can create custom system prompts to replace the default one (`prompts/cli.md`). Create a markdown file in the `~/.malibu/prompts/` directory with your custom prompt content.
 
 To use a custom system prompt, set the `system_prompt_id` in your configuration to match the filename (without the `.md` extension):
 
@@ -421,21 +421,21 @@ To use a custom system prompt, set the `system_prompt_id` in your configuration 
 system_prompt_id = "my_custom_prompt"
 ```
 
-This will load the prompt from `~/.vibe/prompts/my_custom_prompt.md`.
+This will load the prompt from `~/.malibu/prompts/my_custom_prompt.md`.
 
 ### Custom Agent Configurations
 
-You can create custom agent configurations for specific use cases (e.g., red-teaming, specialized tasks) by adding agent-specific TOML files in the `~/.vibe/agents/` directory.
+You can create custom agent configurations for specific use cases (e.g., red-teaming, specialized tasks) by adding agent-specific TOML files in the `~/.malibu/agents/` directory.
 
-To use a custom agent, run Vibe with the `--agent` flag:
+To use a custom agent, run Malibu with the `--agent` flag:
 
 ```bash
-vibe --agent my_custom_agent
+malibu --agent my_custom_agent
 ```
 
-Vibe will look for a file named `my_custom_agent.toml` in the agents directory and apply its configuration.
+Malibu will look for a file named `my_custom_agent.toml` in the agents directory and apply its configuration.
 
-Example custom agent configuration (`~/.vibe/agents/redteam.toml`):
+Example custom agent configuration (`~/.malibu/agents/redteam.toml`):
 
 ```toml
 # Custom agent configuration for red-teaming
@@ -607,15 +607,17 @@ To disable notifications:
 enable_notifications = false
 ```
 
-### Custom Vibe Home Directory
+### Custom Malibu Home Directory
 
-By default, Vibe stores its configuration in `~/.vibe/`. You can override this by setting the `VIBE_HOME` environment variable:
+By default, Malibu stores its configuration in `~/.malibu/`. You can override this by setting the `MALIBU_HOME` environment variable:
 
 ```bash
-export VIBE_HOME="/path/to/custom/vibe/home"
+export MALIBU_HOME="/path/to/custom/malibu/home"
 ```
 
-This affects where Vibe looks for:
+Malibu still accepts the legacy `VIBE_HOME` environment variable during the compatibility period.
+
+This affects where Malibu looks for:
 
 - `config.toml` - Main configuration
 - `.env` - API keys
@@ -626,7 +628,7 @@ This affects where Vibe looks for:
 
 ## Editors/IDEs
 
-Mistral Vibe can be used in text editors and IDEs that support [Agent Client Protocol](https://agentclientprotocol.com/overview/clients). See the [ACP Setup documentation](docs/acp-setup.md) for setup instructions for various editors and IDEs.
+Malibu can be used in text editors and IDEs that support [Agent Client Protocol](https://agentclientprotocol.com/overview/clients). See the [ACP Setup documentation](docs/acp-setup.md) for setup instructions for various editors and IDEs.
 
 ## Resources
 
@@ -635,11 +637,11 @@ Mistral Vibe can be used in text editors and IDEs that support [Agent Client Pro
 
 ## Data collection & usage
 
-Use of Vibe is subject to our [Privacy Policy](https://legal.mistral.ai/terms/privacy-policy) and may include the collection and processing of data related to your use of the service, such as usage data, to operate, maintain, and improve Vibe. You can disable telemetry in your `config.toml` by setting `enable_telemetry = false`.
+Use of Malibu is subject to the applicable privacy policy for your deployment and may include the collection and processing of data related to your use of the service, such as usage data, to operate, maintain, and improve Malibu. You can disable telemetry in your `config.toml` by setting `enable_telemetry = false`.
 
 ## License
 
-Copyright 2025 Mistral AI
+Copyright 2025 Malibu
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

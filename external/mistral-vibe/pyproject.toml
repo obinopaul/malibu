@@ -1,11 +1,10 @@
 [project]
-name = "mistral-vibe"
+name = "malibu"
 version = "2.4.2"
-description = "Minimal CLI coding agent by Mistral"
+description = "Minimal CLI coding agent"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Mistral AI" }]
 keywords = [
     "ai",
     "cli",
@@ -74,10 +73,12 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-include = ["vibe/"]
+include = ["vibe/", "malibu/"]
 
 
 [project.scripts]
+malibu = "vibe.cli.entrypoint:main"
+malibu-acp = "vibe.acp.entrypoint:main"
 vibe = "vibe.cli.entrypoint:main"
 vibe-acp = "vibe.acp.entrypoint:main"
 
@@ -110,12 +111,12 @@ build = ["pyinstaller>=6.17.0"]
 pythonVersion = "3.12"
 reportMissingTypeStubs = false
 reportPrivateImportUsage = false
-include = ["vibe/**/*.py", "tests/**/*.py"]
+include = ["vibe/**/*.py", "malibu/**/*.py", "tests/**/*.py"]
 venvPath = "."
 venv = ".venv"
 
 [tool.ruff]
-include = ["vibe/**/*.py", "tests/**/*.py"]
+include = ["vibe/**/*.py", "malibu/**/*.py", "tests/**/*.py"]
 line-length = 88
 target-version = "py312"
 preview = true
@@ -152,7 +153,7 @@ ignore = ["D203", "D205", "D213", "ANN401", "PLR6301"]
 ban-relative-imports = "all"
 
 [tool.ruff.lint.isort]
-known-first-party = ["vibe"]
+known-first-party = ["malibu", "vibe"]
 force-sort-within-sections = true
 split-on-trailing-comma = false
 combine-as-imports = true
