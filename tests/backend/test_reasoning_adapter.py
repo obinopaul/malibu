@@ -62,7 +62,7 @@ class TestReasoningEffort:
             adapter,
             provider,
             [LLMMessage(role=Role.user, content="Hi")],
-            thinking="off",
+            thinking="none",
         )
         assert "reasoning_effort" not in payload
 

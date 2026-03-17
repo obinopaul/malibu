@@ -390,7 +390,7 @@ class AnthropicAdapter(APIAdapter):
         has_thinking = self._has_thinking_content(messages)
         thinking_level = thinking
 
-        if thinking_level == "off" and not has_thinking:
+        if thinking_level == "none" and not has_thinking:
             payload["temperature"] = temperature
             if max_tokens is not None:
                 payload["max_tokens"] = max_tokens

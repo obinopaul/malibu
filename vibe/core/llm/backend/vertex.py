@@ -76,7 +76,7 @@ class VertexAnthropicAdapter(AnthropicAdapter):
         enable_streaming: bool,
         provider: ProviderConfig,
         api_key: str | None = None,
-        thinking: str = "off",
+        thinking: str = "none",
     ) -> PreparedRequest:
         project_id = provider.project_id
         region = provider.region

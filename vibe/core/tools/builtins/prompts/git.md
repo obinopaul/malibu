@@ -1,31 +1,34 @@
-Use the `git` tool for repository-aware status, diff, log, branch inspection, and guarded commits.
+Use the `git` tool for repository-aware context, status, diff, log, branch inspection, and guarded commits.
+
+Perform structured git operations with implementation-aligned actions and predictable output.
 
 Guidance:
 - Prefer `action="context"` when you need a compact repository summary.
 - Use `status`, `diff`, `log`, `branch`, and `branches` before considering `commit`.
-- `commit` is guarded and may return a `snapshot_id` created before the mutation.
-- Treat protected-branch commit refusals as hard stops, not retry prompts.
-- When a commit fails because there are no staged changes, inspect the repo state instead of repeating the same call.
-
-Perform structured git operations with built-in safety checks. Provides structured output instead of raw git command output.
+- `commit` may return a `snapshot_id` created before mutation.
+- If commit fails due to missing staged changes, inspect status/diff before retrying.
 
 ## Available actions
 
-- status: Show branch, ahead/behind, and changed files
-- diff: Show file differences (params: file, staged)
-- log: Show commit history (params: limit, oneline)
-- branch: List/create/delete branches (params: name, delete)
-- checkout: Switch branches (params: branch, create) -- warns if working tree is dirty
-- commit: Create a commit (params: message) -- requires staged changes
-- push: Push to remote (params: remote, branch, force) -- refuses force-push to main/master
-- pull: Pull from remote (params: remote, branch)
-- stash: Stash operations (params: action=list/push/pop/drop/show, message)
-- merge: Merge a branch (params: branch)
-- create_pr: Create a pull request via gh CLI (params: title, body, base)
+- context: Show compact repository summary.
+- status: Show current repository status.
+- diff: Show differences (supports `staged`).
+- log: Show commit history (supports `n` and `oneline`).
+- branch: Show current branch.
+- branches: List branches.
+- commit: Create commit (requires `message`, supports optional `files` pre-stage list).
 
-## Safety checks
+## Arguments
 
-- Refuses force-push to protected branches (main, master, develop, production, staging)
-- Warns about uncommitted changes before checkout
-- Requires staged changes before commit
-- Uses --force-with-lease instead of --force for safer push
+- `action` (required): One of the supported actions.
+- `cwd` (optional): Repository directory.
+- `staged` (optional): Use staged diff for `action="diff"`.
+- `n` (optional): Number of commits for `action="log"`.
+- `oneline` (optional): One-line format for `action="log"`.
+- `message` (required for commit): Commit message.
+- `files` (optional for commit): File paths to stage before committing.
+
+## Notes
+
+- Actions such as `checkout`, `push`, `pull`, `stash`, `merge`, and `create_pr` are not part of this tool's current action set.
+- Use shell git commands only when you need operations outside this action set.

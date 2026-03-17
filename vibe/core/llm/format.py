@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -16,6 +17,9 @@ from vibe.core.types import (
 
 if TYPE_CHECKING:
     from vibe.core.tools.manager import ToolManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class ParsedToolCall(BaseModel):
@@ -61,16 +65,31 @@ class APIToolFormatHandler:
         return "api"
 
     def get_available_tools(self, tool_manager: ToolManager) -> list[AvailableTool]:
-        return [
-            AvailableTool(
-                function=AvailableFunction(
-                    name=tool_class.get_name(),
-                    description=tool_class.description,
-                    parameters=tool_class.get_parameters(),
+        available_tools: list[AvailableTool] = []
+        for tool_class in tool_manager.available_tools.values():
+            tool_name = tool_class.get_name()
+            if len(tool_name) > 128:
+                logger.warning(
+                    "Tool name exceeds OpenAI limit; truncating",
+                    extra={
+                        "tool_name": tool_name,
+                        "tool_name_len": len(tool_name),
+                        "tool_class": tool_class.__name__,
+                        "tool_module": tool_class.__module__,
+                    },
+                )
+
+            available_tools.append(
+                AvailableTool(
+                    function=AvailableFunction(
+                        name=tool_name[:128],  # OpenAI API limit: 128 chars max
+                        description=tool_class.description,
+                        parameters=tool_class.get_parameters(),
+                    )
                 )
             )
-            for tool_class in tool_manager.available_tools.values()
-        ]
+
+        return available_tools
 
     def get_tool_choice(self) -> StrToolChoice | AvailableTool:
         return "auto"

@@ -30,6 +30,15 @@ if TYPE_CHECKING:
     from vibe.core.config import ModelConfig, ProviderConfig
 
 
+_OPENAI_TOOL_NAME_MAX_LEN = 128
+
+
+def _clamp_tool_name(name: str | None) -> str:
+    if not name:
+        return ""
+    return name[:_OPENAI_TOOL_NAME_MAX_LEN]
+
+
 class OpenAIAdapter(APIAdapter):
     endpoint: ClassVar[str] = "/chat/completions"
 
@@ -49,12 +58,27 @@ class OpenAIAdapter(APIAdapter):
         }
 
         if tools:
-            payload["tools"] = [tool.model_dump(exclude_none=True) for tool in tools]
+            payload["tools"] = [
+                {
+                    **tool.model_dump(exclude_none=True),
+                    "function": {
+                        **tool.function.model_dump(exclude_none=True),
+                        "name": _clamp_tool_name(tool.function.name),
+                    },
+                }
+                for tool in tools
+            ]
         if tool_choice:
             payload["tool_choice"] = (
                 tool_choice
                 if isinstance(tool_choice, str)
-                else tool_choice.model_dump()
+                else {
+                    **tool_choice.model_dump(),
+                    "function": {
+                        **tool_choice.function.model_dump(),
+                        "name": _clamp_tool_name(tool_choice.function.name),
+                    },
+                }
             )
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
@@ -103,6 +127,22 @@ class OpenAIAdapter(APIAdapter):
             )
             for msg in merged_messages
         ]
+
+        for converted in converted_messages:
+            if converted.get("role") == "tool" and isinstance(converted.get("name"), str):
+                converted["name"] = _clamp_tool_name(converted.get("name"))
+
+            tool_calls = converted.get("tool_calls")
+            if isinstance(tool_calls, list):
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    function_block = tool_call.get("function")
+                    if not isinstance(function_block, dict):
+                        continue
+                    function_block["name"] = _clamp_tool_name(
+                        function_block.get("name")
+                    )
 
         payload = self.build_payload(
             model_name, converted_messages, temperature, tools, max_tokens, tool_choice
@@ -169,7 +209,7 @@ class OpenAIResponsesAdapter(APIAdapter):
     ) -> str | dict[str, Any] | None:
         if tool_choice is None or isinstance(tool_choice, str):
             return tool_choice
-        return {"type": "function", "name": tool_choice.function.name}
+        return {"type": "function", "name": _clamp_tool_name(tool_choice.function.name)}
 
     def _convert_assistant_message(self, msg: LLMMessage) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -180,7 +220,7 @@ class OpenAIResponsesAdapter(APIAdapter):
                 {
                     "type": "function_call",
                     "call_id": tool_call.id or "",
-                    "name": tool_call.function.name or "",
+                    "name": _clamp_tool_name(tool_call.function.name),
                     "arguments": tool_call.function.arguments or "",
                 }
             )
@@ -257,7 +297,7 @@ class OpenAIResponsesAdapter(APIAdapter):
         if call_id := item.get("call_id") or item.get("id"):
             state["id"] = call_id
         if name := item.get("name"):
-            state["name"] = name
+            state["name"] = _clamp_tool_name(name)
         if item_id := item.get("id"):
             state["item_id"] = item_id
         return state
@@ -387,7 +427,7 @@ class OpenAIResponsesAdapter(APIAdapter):
                 if call_id := data.get("call_id"):
                     state["id"] = call_id
                 if name := data.get("name"):
-                    state["name"] = name
+                    state["name"] = _clamp_tool_name(name)
                 return self._tool_call_chunk(
                     output_index=output_index,
                     arguments=str(data.get("delta", "")),

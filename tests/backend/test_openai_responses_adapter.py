@@ -124,7 +124,7 @@ class TestPrepareRequest:
             adapter,
             provider,
             [LLMMessage(role=Role.user, content="Hi")],
-            thinking="off",
+            thinking="none",
         )
 
         assert "reasoning" not in payload
@@ -150,7 +150,7 @@ class TestPrepareRequest:
             provider,
             [LLMMessage(role=Role.user, content="Hi")],
             model_name="gpt-5.1",
-            thinking="off",
+            thinking="none",
             temperature=0.7,
         )
 
@@ -164,11 +164,50 @@ class TestPrepareRequest:
             provider,
             [LLMMessage(role=Role.user, content="Hi")],
             model_name="gpt-5",
-            thinking="off",
+            thinking="none",
             temperature=0.7,
         )
 
         assert "temperature" not in payload
+
+    def test_clamps_oversized_tool_names_in_responses_payload(
+        self, adapter: OpenAIResponsesAdapter, provider: ProviderConfig
+    ) -> None:
+        long_name = "a" * 580
+        messages = [
+            LLMMessage(role=Role.user, content="todo"),
+            LLMMessage(
+                role=Role.assistant,
+                tool_calls=[
+                    ToolCall(
+                        id="call_123",
+                        index=0,
+                        function=FunctionCall(name=long_name, arguments="{}"),
+                    )
+                ],
+            ),
+        ]
+        tools = [
+            AvailableTool(
+                function=AvailableFunction(
+                    name=long_name,
+                    description="Long name tool",
+                    parameters={"type": "object", "properties": {}},
+                )
+            )
+        ]
+
+        payload = _prepare(
+            adapter,
+            provider,
+            messages,
+            tools=tools,
+            tool_choice=tools[0],
+        )
+
+        assert len(payload["input"][1]["name"]) == 128
+        assert len(payload["tools"][0]["name"]) == 128
+        assert len(payload["tool_choice"]["name"]) == 128
 
 
 class TestParseResponse:

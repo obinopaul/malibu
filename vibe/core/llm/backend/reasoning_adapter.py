@@ -19,6 +19,15 @@ from vibe.core.types import (
 )
 
 
+_OPENAI_TOOL_NAME_MAX_LEN = 128
+
+
+def _clamp_tool_name(name: str | None) -> str:
+    if not name:
+        return ""
+    return name[:_OPENAI_TOOL_NAME_MAX_LEN]
+
+
 class ReasoningAdapter(APIAdapter):
     endpoint: ClassVar[str] = "/chat/completions"
 
@@ -37,7 +46,7 @@ class ReasoningAdapter(APIAdapter):
                     "tool_call_id": msg.tool_call_id,
                 }
                 if msg.name:
-                    result["name"] = msg.name
+                    result["name"] = _clamp_tool_name(msg.name)
                 return result
 
     def _convert_assistant_message(self, msg: LLMMessage) -> dict[str, Any]:
@@ -61,7 +70,7 @@ class ReasoningAdapter(APIAdapter):
                     "id": tc.id,
                     "type": "function",
                     "function": {
-                        "name": tc.function.name or "",
+                        "name": _clamp_tool_name(tc.function.name),
                         "arguments": tc.function.arguments or "",
                     },
                     **({"index": tc.index} if tc.index is not None else {}),
@@ -88,11 +97,20 @@ class ReasoningAdapter(APIAdapter):
             "temperature": temperature,
         }
 
-        if thinking != "off":
+        if thinking != "none":
             payload["reasoning_effort"] = thinking
 
         if tools:
-            payload["tools"] = [tool.model_dump(exclude_none=True) for tool in tools]
+            payload["tools"] = [
+                {
+                    **tool.model_dump(exclude_none=True),
+                    "function": {
+                        **tool.function.model_dump(exclude_none=True),
+                        "name": _clamp_tool_name(tool.function.name),
+                    },
+                }
+                for tool in tools
+            ]
 
         if tool_choice:
             payload["tool_choice"] = (
