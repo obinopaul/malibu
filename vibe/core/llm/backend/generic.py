@@ -163,6 +163,28 @@ class OpenAIResponsesAdapter(APIAdapter):
 
     def __init__(self) -> None:
         self._function_call_state: dict[int, dict[str, Any]] = {}
+        self._streaming_request_enabled = False
+        self._seen_text_delta = False
+        self._seen_reasoning_delta = False
+        self._seen_tool_call_event = False
+
+    @staticmethod
+    def _tool_to_api(tool: AvailableTool) -> dict[str, Any]:
+        return {
+            "type": tool.type,
+            "name": tool.function.name,
+            "description": tool.function.description,
+            "parameters": tool.function.parameters,
+        }
+
+    @staticmethod
+    def _supports_temperature(model_name: str, thinking: str) -> bool:
+        normalized_name = model_name.lower()
+        if not normalized_name.startswith("gpt-5"):
+            return True
+        if normalized_name.startswith(("gpt-5.1", "gpt-5.2")):
+            return thinking == "off"
+        return False
 
     def _tool_choice_to_api(
         self, tool_choice: StrToolChoice | AvailableTool | None
@@ -284,6 +306,13 @@ class OpenAIResponsesAdapter(APIAdapter):
             usage=LLMUsage(),
         )
 
+    @staticmethod
+    def _empty_chunk(usage: LLMUsage | None = None) -> LLMChunk:
+        return LLMChunk(
+            message=LLMMessage(role=Role.assistant, content=""),
+            usage=usage or LLMUsage(),
+        )
+
     def prepare_request(  # noqa: PLR0913
         self,
         *,
@@ -300,6 +329,10 @@ class OpenAIResponsesAdapter(APIAdapter):
     ) -> PreparedRequest:
         del provider
         self._function_call_state.clear()
+        self._streaming_request_enabled = enable_streaming
+        self._seen_text_delta = False
+        self._seen_reasoning_delta = False
+        self._seen_tool_call_event = False
 
         merged_messages = merge_consecutive_user_messages(messages)
         instructions_parts = [
@@ -315,8 +348,10 @@ class OpenAIResponsesAdapter(APIAdapter):
         payload: dict[str, Any] = {
             "model": model_name,
             "input": input_items,
-            "temperature": temperature,
         }
+
+        if self._supports_temperature(model_name, thinking):
+            payload["temperature"] = temperature
 
         if instructions_parts:
             payload["instructions"] = "\n\n".join(
@@ -327,7 +362,7 @@ class OpenAIResponsesAdapter(APIAdapter):
             payload["reasoning"] = {"effort": thinking, "summary": "auto"}
 
         if tools:
-            payload["tools"] = [tool.model_dump(exclude_none=True) for tool in tools]
+            payload["tools"] = [self._tool_to_api(tool) for tool in tools]
 
         if converted_tool_choice := self._tool_choice_to_api(tool_choice):
             payload["tool_choice"] = converted_tool_choice
@@ -354,6 +389,7 @@ class OpenAIResponsesAdapter(APIAdapter):
 
         match event_type:
             case "response.output_text.delta":
+                self._seen_text_delta = True
                 return LLMChunk(
                     message=LLMMessage(
                         role=Role.assistant, content=str(data.get("delta", ""))
@@ -361,6 +397,7 @@ class OpenAIResponsesAdapter(APIAdapter):
                     usage=usage,
                 )
             case "response.reasoning_summary_text.delta":
+                self._seen_reasoning_delta = True
                 return LLMChunk(
                     message=LLMMessage(
                         role=Role.assistant,
@@ -371,15 +408,14 @@ class OpenAIResponsesAdapter(APIAdapter):
             case "response.output_item.added":
                 item = data.get("item") or {}
                 if item.get("type") != "function_call":
-                    return LLMChunk(
-                        message=LLMMessage(role=Role.assistant, content=""),
-                        usage=usage,
-                    )
+                    return self._empty_chunk(usage)
                 output_index = int(data.get("output_index", 0))
+                self._seen_tool_call_event = True
                 self._remember_function_call(output_index, item)
                 return self._tool_call_chunk(output_index=output_index, item=item)
             case "response.function_call_arguments.delta":
                 output_index = int(data.get("output_index", 0))
+                self._seen_tool_call_event = True
                 self._function_call_state.setdefault(output_index, {})[
                     "seen_argument_delta"
                 ] = True
@@ -397,18 +433,18 @@ class OpenAIResponsesAdapter(APIAdapter):
                 output_index = int(data.get("output_index", 0))
                 match item.get("type"):
                     case "function_call":
+                        self._seen_tool_call_event = True
                         state = self._remember_function_call(output_index, item)
                         if state.get("seen_argument_delta"):
-                            return LLMChunk(
-                                message=LLMMessage(role=Role.assistant, content=""),
-                                usage=usage,
-                            )
+                            return self._empty_chunk(usage)
                         return self._tool_call_chunk(
                             output_index=output_index,
                             item=item,
                             arguments=str(item.get("arguments", "")),
                         )
                     case "reasoning":
+                        if self._streaming_request_enabled and self._seen_reasoning_delta:
+                            return self._empty_chunk(usage)
                         return LLMChunk(
                             message=LLMMessage(
                                 role=Role.assistant,
@@ -420,6 +456,8 @@ class OpenAIResponsesAdapter(APIAdapter):
                             usage=usage,
                         )
                     case "message":
+                        if self._streaming_request_enabled and self._seen_text_delta:
+                            return self._empty_chunk(usage)
                         return LLMChunk(
                             message=LLMMessage(
                                 role=Role.assistant,
@@ -454,6 +492,14 @@ class OpenAIResponsesAdapter(APIAdapter):
                                 )
                             )
 
+                if self._streaming_request_enabled:
+                    if self._seen_text_delta:
+                        text_parts.clear()
+                    if self._seen_reasoning_delta:
+                        reasoning_parts.clear()
+                    if self._seen_tool_call_event:
+                        tool_calls.clear()
+
                 return LLMChunk(
                     message=LLMMessage(
                         role=Role.assistant,
@@ -464,7 +510,7 @@ class OpenAIResponsesAdapter(APIAdapter):
                     usage=usage,
                 )
 
-        return LLMChunk(message=LLMMessage(role=Role.assistant, content=""), usage=usage)
+        return self._empty_chunk(usage)
 
 
 AdapterFactory = Callable[[], APIAdapter]

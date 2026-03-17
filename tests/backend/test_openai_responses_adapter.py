@@ -10,6 +10,7 @@ from vibe.core.types import (
     AvailableFunction,
     AvailableTool,
     FunctionCall,
+    LLMChunk,
     LLMMessage,
     Role,
     ToolCall,
@@ -109,7 +110,12 @@ class TestPrepareRequest:
             },
             {"type": "function_call_output", "call_id": "call_123", "output": "result"},
         ]
-        assert payload["tools"][0]["function"]["name"] == "search"
+        assert payload["tools"][0] == {
+            "type": "function",
+            "name": "search",
+            "description": "Search",
+            "parameters": {"type": "object", "properties": {}},
+        }
 
     def test_omits_reasoning_config_when_thinking_is_off(
         self, adapter: OpenAIResponsesAdapter, provider: ProviderConfig
@@ -122,6 +128,47 @@ class TestPrepareRequest:
         )
 
         assert "reasoning" not in payload
+
+    def test_omits_temperature_for_gpt_5_1_when_reasoning_enabled(
+        self, adapter: OpenAIResponsesAdapter, provider: ProviderConfig
+    ) -> None:
+        payload = _prepare(
+            adapter,
+            provider,
+            [LLMMessage(role=Role.user, content="Hi")],
+            model_name="gpt-5.1",
+            thinking="medium",
+        )
+
+        assert "temperature" not in payload
+
+    def test_keeps_temperature_for_gpt_5_1_when_reasoning_is_off(
+        self, adapter: OpenAIResponsesAdapter, provider: ProviderConfig
+    ) -> None:
+        payload = _prepare(
+            adapter,
+            provider,
+            [LLMMessage(role=Role.user, content="Hi")],
+            model_name="gpt-5.1",
+            thinking="off",
+            temperature=0.7,
+        )
+
+        assert payload["temperature"] == 0.7
+
+    def test_omits_temperature_for_gpt_5_family_models_without_support(
+        self, adapter: OpenAIResponsesAdapter, provider: ProviderConfig
+    ) -> None:
+        payload = _prepare(
+            adapter,
+            provider,
+            [LLMMessage(role=Role.user, content="Hi")],
+            model_name="gpt-5",
+            thinking="off",
+            temperature=0.7,
+        )
+
+        assert "temperature" not in payload
 
 
 class TestParseResponse:
@@ -215,3 +262,79 @@ class TestParseResponse:
         assert chunk.usage is not None
         assert chunk.usage.prompt_tokens == 10
         assert chunk.usage.completion_tokens == 5
+
+    def test_streaming_terminal_events_do_not_duplicate_text_or_reasoning(
+        self, adapter: OpenAIResponsesAdapter, provider: ProviderConfig
+    ) -> None:
+        _prepare(
+            adapter,
+            provider,
+            [LLMMessage(role=Role.user, content="Hi")],
+            enable_streaming=True,
+        )
+
+        chunks = [
+            adapter.parse_response(
+                {"type": "response.reasoning_summary_text.delta", "delta": "Think"},
+                provider,
+            ),
+            adapter.parse_response(
+                {"type": "response.output_text.delta", "delta": "Hello"},
+                provider,
+            ),
+            adapter.parse_response(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Think"}],
+                    },
+                },
+                provider,
+            ),
+            adapter.parse_response(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 1,
+                    "item": {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Hello"}],
+                    },
+                },
+                provider,
+            ),
+            adapter.parse_response(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "output": [
+                            {
+                                "type": "reasoning",
+                                "summary": [
+                                    {"type": "summary_text", "text": "Think"}
+                                ],
+                            },
+                            {
+                                "type": "message",
+                                "content": [
+                                    {"type": "output_text", "text": "Hello"}
+                                ],
+                            },
+                        ],
+                        "usage": {"input_tokens": 3, "output_tokens": 2},
+                    },
+                },
+                provider,
+            ),
+        ]
+
+        aggregate = LLMChunk(message=LLMMessage(role=Role.assistant))
+        for chunk in chunks:
+            aggregate += chunk
+
+        assert aggregate.message.reasoning_content == "Think"
+        assert aggregate.message.content == "Hello"
+        assert aggregate.usage is not None
+        assert aggregate.usage.prompt_tokens == 3
+        assert aggregate.usage.completion_tokens == 2
