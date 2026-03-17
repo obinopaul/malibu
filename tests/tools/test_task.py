@@ -75,10 +75,19 @@ class TestTaskToolValidation:
         agent = BUILTIN_AGENTS["explore"]
         assert agent.agent_type == AgentType.SUBAGENT
 
+    def test_planner_agent_is_valid_subagent(self) -> None:
+        agent = BUILTIN_AGENTS["planner"]
+        assert agent.agent_type == AgentType.SUBAGENT
+
 
 class TestTaskToolResolvePermission:
     def test_explore_allowed_by_default(self, task_tool: Task) -> None:
         args = TaskArgs(task="do something", agent="explore")
+        result = task_tool.resolve_permission(args)
+        assert result == ToolPermission.ALWAYS
+
+    def test_planner_allowed_by_default(self, task_tool: Task) -> None:
+        args = TaskArgs(task="do something", agent="planner")
         result = task_tool.resolve_permission(args)
         assert result == ToolPermission.ALWAYS
 
@@ -118,6 +127,7 @@ class TestTaskToolResolvePermission:
     def test_default_config_has_explore_in_allowlist(self) -> None:
         config = TaskToolConfig()
         assert "explore" in config.allowlist
+        assert "planner" in config.allowlist
 
 
 class TestTaskToolExecution:

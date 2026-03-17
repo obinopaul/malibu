@@ -165,7 +165,9 @@ class AgentLoop:
         self.tool_manager = ToolManager(
             lambda: self.config, mcp_registry=self._mcp_registry
         )
-        self.skill_manager = SkillManager(lambda: self.config)
+        self.skill_manager = SkillManager(
+            lambda: self.config, active_agent_getter=lambda: self.agent_profile
+        )
         self.format_handler = APIToolFormatHandler()
 
         self.backend_factory = lambda: backend or self._select_backend()

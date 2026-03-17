@@ -15,6 +15,13 @@ from vibe.core.tools.base import (
     ToolError,
     ToolPermission,
 )
+from vibe.core.tools.builtins._file_tool_utils import (
+    FileKind,
+    detect_file,
+    ensure_existing_file,
+    resolve_tool_path,
+    slice_content_lines,
+)
 from vibe.core.tools.ui import ToolCallDisplay, ToolResultDisplay, ToolUIData
 from vibe.core.tools.utils import resolve_file_tool_permission
 from vibe.core.types import ToolStreamEvent
@@ -27,6 +34,8 @@ class _ReadResult(NamedTuple):
     lines: list[str]
     bytes_read: int
     was_truncated: bool
+    file_kind: FileKind
+    mime_type: str
 
 
 class ReadFileArgs(BaseModel):
@@ -44,6 +53,8 @@ class ReadFileResult(BaseModel):
     path: str
     content: str
     lines_read: int
+    file_kind: FileKind
+    mime_type: str
     was_truncated: bool = Field(
         description="True if the reading was stopped due to the max_read_bytes limit."
     )
@@ -62,8 +73,9 @@ class ReadFile(
     ToolUIData[ReadFileArgs, ReadFileResult],
 ):
     description: ClassVar[str] = (
-        "Read a UTF-8 file, returning content from a specific line range. "
-        "Reading is capped by a byte limit for safety."
+        "Read local files with line-based paging. "
+        "Text files are returned directly, PDFs are extracted to text, "
+        "and supported images return metadata summaries."
     )
 
     @final
@@ -78,6 +90,8 @@ class ReadFile(
             path=str(file_path),
             content="".join(read_result.lines),
             lines_read=len(read_result.lines),
+            file_kind=read_result.file_kind,
+            mime_type=read_result.mime_type,
             was_truncated=read_result.was_truncated,
         )
 
@@ -91,22 +105,37 @@ class ReadFile(
 
     def _prepare_and_validate_path(self, args: ReadFileArgs) -> Path:
         self._validate_inputs(args)
-
-        file_path = Path(args.path).expanduser()
-        if not file_path.is_absolute():
-            file_path = Path.cwd() / file_path
-
-        self._validate_path(file_path)
-        return file_path
+        return ensure_existing_file(resolve_tool_path(args.path))
 
     async def _read_file(self, args: ReadFileArgs, file_path: Path) -> _ReadResult:
+        detection = detect_file(file_path)
+
+        match detection.file_kind:
+            case FileKind.TEXT:
+                return await self._read_text_file(args, file_path, detection.mime_type)
+            case FileKind.PDF:
+                return await anyio.to_thread.run_sync(
+                    self._read_pdf_file, args, file_path, detection.mime_type
+                )
+            case FileKind.IMAGE:
+                return await anyio.to_thread.run_sync(
+                    self._read_image_file, args, file_path, detection.mime_type
+                )
+            case FileKind.BINARY:
+                raise ToolError(
+                    f"Unsupported binary file: {file_path} ({detection.mime_type})"
+                )
+
+    async def _read_text_file(
+        self, args: ReadFileArgs, file_path: Path, mime_type: str
+    ) -> _ReadResult:
         try:
             lines_to_return: list[str] = []
             bytes_read = 0
             was_truncated = False
 
             async with await anyio.Path(file_path).open(
-                encoding="utf-8", errors="ignore"
+                encoding="utf-8", errors="replace"
             ) as f:
                 line_index = 0
                 async for line in f:
@@ -130,33 +159,91 @@ class ReadFile(
                 lines=lines_to_return,
                 bytes_read=bytes_read,
                 was_truncated=was_truncated,
+                file_kind=FileKind.TEXT,
+                mime_type=mime_type,
             )
 
         except OSError as exc:
             raise ToolError(f"Error reading {file_path}: {exc}") from exc
 
+    def _read_pdf_file(
+        self, args: ReadFileArgs, file_path: Path, mime_type: str
+    ) -> _ReadResult:
+        try:
+            import fitz
+        except ImportError as exc:
+            raise ToolError(
+                "PDF support requires the optional 'pymupdf' dependency."
+            ) from exc
+
+        try:
+            with fitz.open(file_path) as document:
+                extracted = "\n".join(page.get_text("text") for page in document)
+        except Exception as exc:
+            raise ToolError(
+                f"Error extracting PDF text from {file_path}: {exc}"
+            ) from exc
+
+        lines = extracted.splitlines(keepends=True)
+        sliced = slice_content_lines(
+            lines,
+            offset=args.offset,
+            limit=args.limit,
+            max_bytes=self.config.max_read_bytes,
+        )
+        return _ReadResult(
+            lines=sliced.content.splitlines(keepends=True),
+            bytes_read=len(sliced.content.encode("utf-8")),
+            was_truncated=sliced.was_truncated,
+            file_kind=FileKind.PDF,
+            mime_type=mime_type,
+        )
+
+    def _read_image_file(
+        self, args: ReadFileArgs, file_path: Path, mime_type: str
+    ) -> _ReadResult:
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise ToolError(
+                "Image metadata support requires the optional 'pillow' dependency."
+            ) from exc
+
+        try:
+            with Image.open(file_path) as image:
+                summary_lines = [
+                    f"Path: {file_path}\n",
+                    f"Format: {image.format or file_path.suffix.removeprefix('.').upper()}\n",
+                    f"MIME Type: {mime_type}\n",
+                    f"Dimensions: {image.width}x{image.height}\n",
+                    f"Mode: {image.mode}\n",
+                    f"Animated: {bool(getattr(image, 'is_animated', False))}\n",
+                    f"Frames: {getattr(image, 'n_frames', 1)}\n",
+                ]
+        except Exception as exc:
+            raise ToolError(
+                f"Error reading image metadata from {file_path}: {exc}"
+            ) from exc
+
+        sliced = slice_content_lines(
+            summary_lines,
+            offset=args.offset,
+            limit=args.limit,
+            max_bytes=self.config.max_read_bytes,
+        )
+        return _ReadResult(
+            lines=sliced.content.splitlines(keepends=True),
+            bytes_read=len(sliced.content.encode("utf-8")),
+            was_truncated=sliced.was_truncated,
+            file_kind=FileKind.IMAGE,
+            mime_type=mime_type,
+        )
+
     def _validate_inputs(self, args: ReadFileArgs) -> None:
-        if not args.path.strip():
-            raise ToolError("Path cannot be empty")
         if args.offset < 0:
             raise ToolError("Offset cannot be negative")
         if args.limit is not None and args.limit <= 0:
             raise ToolError("Limit, if provided, must be a positive number")
-
-    def _validate_path(self, file_path: Path) -> None:
-        try:
-            resolved_path = file_path.resolve()
-        except ValueError:
-            raise ToolError(
-                f"Security error: Cannot read path '{file_path}' outside of the project directory '{Path.cwd()}'."
-            )
-        except FileNotFoundError:
-            raise ToolError(f"File not found at: {file_path}")
-
-        if not resolved_path.exists():
-            raise ToolError(f"File not found at: {file_path}")
-        if resolved_path.is_dir():
-            raise ToolError(f"Path is a directory, not a file: {file_path}")
 
     @classmethod
     def format_call_display(cls, args: ReadFileArgs) -> ToolCallDisplay:
@@ -178,7 +265,19 @@ class ReadFile(
             )
 
         path_obj = Path(event.result.path)
-        message = f"Read {event.result.lines_read} line{'' if event.result.lines_read <= 1 else 's'} from {path_obj.name}"
+        match event.result.file_kind:
+            case FileKind.IMAGE:
+                message = f"Read image metadata from {path_obj.name}"
+            case FileKind.PDF:
+                message = (
+                    f"Read {event.result.lines_read} extracted line"
+                    f"{'' if event.result.lines_read == 1 else 's'} from {path_obj.name}"
+                )
+            case _:
+                message = (
+                    f"Read {event.result.lines_read} line"
+                    f"{'' if event.result.lines_read == 1 else 's'} from {path_obj.name}"
+                )
         if event.result.was_truncated:
             message += " (truncated)"
 

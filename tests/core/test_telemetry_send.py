@@ -13,6 +13,7 @@ from vibe.core.config import Backend
 from vibe.core.llm.format import ResolvedToolCall
 from vibe.core.telemetry.send import DATALAKE_EVENTS_URL, TelemetryClient
 from vibe.core.tools.base import BaseTool, ToolPermission
+from vibe.core.tools.builtins.apply_patch import ApplyPatch, ApplyPatchArgs
 from vibe.core.utils import get_user_agent
 
 _original_send_telemetry_event = TelemetryClient.send_telemetry_event
@@ -27,6 +28,13 @@ def _make_resolved_tool_call(
             path="foo.txt", content="x", overwrite=args_dict.get("overwrite", False)
         )
         cls: type[BaseTool] = WriteFile
+    elif tool_name == "apply_patch":
+        validated = ApplyPatchArgs(
+            input=args_dict.get(
+                "input", "*** Begin Patch\n*** Add File: foo.txt\n+x\n*** End Patch"
+            )
+        )
+        cls = ApplyPatch
     else:
         validated = FakeToolArgs()
         cls = FakeTool
@@ -141,6 +149,7 @@ class TestTelemetryClient:
         assert properties["agent_profile_name"] == "default"
         assert properties["nb_files_created"] == 0
         assert properties["nb_files_modified"] == 0
+        assert properties["nb_files_deleted"] == 0
 
     def test_send_tool_call_finished_nb_files_created_write_file_new(
         self, telemetry_events: list[dict[str, Any]]
@@ -159,6 +168,7 @@ class TestTelemetryClient:
 
         assert telemetry_events[0]["properties"]["nb_files_created"] == 1
         assert telemetry_events[0]["properties"]["nb_files_modified"] == 0
+        assert telemetry_events[0]["properties"]["nb_files_deleted"] == 0
 
     def test_send_tool_call_finished_nb_files_modified_write_file_overwrite(
         self, telemetry_events: list[dict[str, Any]]
@@ -177,6 +187,31 @@ class TestTelemetryClient:
 
         assert telemetry_events[0]["properties"]["nb_files_created"] == 0
         assert telemetry_events[0]["properties"]["nb_files_modified"] == 1
+        assert telemetry_events[0]["properties"]["nb_files_deleted"] == 0
+
+    def test_send_tool_call_finished_apply_patch_metrics(
+        self, telemetry_events: list[dict[str, Any]]
+    ) -> None:
+        config = build_test_vibe_config(enable_telemetry=True)
+        client = TelemetryClient(config_getter=lambda: config)
+        tool_call = _make_resolved_tool_call("apply_patch", {})
+
+        client.send_tool_call_finished(
+            tool_call=tool_call,
+            status="success",
+            decision=None,
+            agent_profile_name="default",
+            result={
+                "created_paths": ["a.txt"],
+                "modified_paths": ["b.txt", "c.txt"],
+                "deleted_paths": ["d.txt"],
+            },
+        )
+
+        properties = telemetry_events[0]["properties"]
+        assert properties["nb_files_created"] == 1
+        assert properties["nb_files_modified"] == 2
+        assert properties["nb_files_deleted"] == 1
 
     def test_send_tool_call_finished_decision_none(
         self, telemetry_events: list[dict[str, Any]]

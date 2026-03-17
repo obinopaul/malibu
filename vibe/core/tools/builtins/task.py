@@ -48,7 +48,9 @@ class TaskResult(BaseModel):
 
 class TaskToolConfig(BaseToolConfig):
     permission: ToolPermission = ToolPermission.ASK
-    allowlist: list[str] = Field(default=[BuiltinAgentName.EXPLORE])
+    allowlist: list[str] = Field(
+        default=[BuiltinAgentName.EXPLORE, BuiltinAgentName.PLANNER]
+    )
 
 
 class Task(

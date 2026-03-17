@@ -15,6 +15,24 @@ from vibe.core.config.credentials import get_saved_api_key, mask_secret
 if TYPE_CHECKING:
     from vibe.core.config import ModelConfig, ProviderConfig, VibeConfig
 
+_WEB_SEARCH_PROVIDER_LABELS = {
+    "auto": "Auto",
+    "tavily": "Tavily",
+    "ddgs": "DDGS",
+}
+_WEB_FETCH_PROVIDER_LABELS = {
+    "auto": "Auto",
+    "tavily": "Tavily",
+    "http": "HTTP",
+}
+_WEB_SEARCH_PROVIDER_VALUES = {
+    label: value for value, label in _WEB_SEARCH_PROVIDER_LABELS.items()
+}
+_WEB_FETCH_PROVIDER_VALUES = {
+    label: value for value, label in _WEB_FETCH_PROVIDER_LABELS.items()
+}
+_TAVILY_API_ENV_VAR = "TAVILY_API_KEY"
+
 
 class SettingDefinition(TypedDict):
     key: str
@@ -44,7 +62,7 @@ class ConfigApp(Container):
     class ConfigClosed(Message):
         def __init__(
             self,
-            changes: dict[str, str | bool],
+            changes: dict[str, object],
             env_updates: dict[str, str],
         ) -> None:
             super().__init__()
@@ -101,7 +119,8 @@ class ConfigApp(Container):
             yield self.secret_input
 
             self.help_widget = NoMarkupStatic(
-                "↑↓ navigate  Space/Enter toggle  ESC exit", classes="settings-help"
+                "↑↓ navigate  Space/Enter toggle  ESC exit",
+                classes="settings-help",
             )
             yield self.help_widget
 
@@ -142,6 +161,24 @@ class ConfigApp(Container):
                 "options": [],
             },
             {
+                "key": "web_search_provider",
+                "label": "Web search provider",
+                "type": "cycle",
+                "options": list(_WEB_SEARCH_PROVIDER_VALUES),
+            },
+            {
+                "key": "web_fetch_provider",
+                "label": "Web fetch provider",
+                "type": "cycle",
+                "options": list(_WEB_FETCH_PROVIDER_VALUES),
+            },
+            {
+                "key": "tavily_api_key",
+                "label": "Tavily API key",
+                "type": "secret",
+                "options": [],
+            },
+            {
                 "key": "autocopy_to_clipboard",
                 "label": "Auto-copy",
                 "type": "cycle",
@@ -169,30 +206,68 @@ class ConfigApp(Container):
             return changed_model
         return self.config.get_default_model_for_provider(self.selected_provider_name).alias
 
+    def _get_tool_setting(self, tool_name: str, setting_name: str, default: str) -> str:
+        if tool_config := self.config.tools.get(tool_name):
+            raw_value = tool_config.model_dump().get(setting_name, default)
+            if isinstance(raw_value, str) and raw_value.strip():
+                return raw_value
+        return default
+
+    def _get_secret_env_var(self, setting_key: str) -> str | None:
+        match setting_key:
+            case "api_key":
+                return self._current_provider().api_key_env_var or None
+            case "tavily_api_key":
+                return _TAVILY_API_ENV_VAR
+            case _:
+                return None
+
+    def _get_secret_value(self, setting_key: str) -> str | None:
+        if not (env_var := self._get_secret_env_var(setting_key)):
+            return None
+        return self.env_updates.get(env_var) or get_saved_api_key(env_var)
+
+    def _selected_setting(self) -> SettingDefinition:
+        return self.settings[self.selected_index]
+
+    def _selected_secret_env_var(self) -> str | None:
+        return self._get_secret_env_var(self._selected_setting()["key"])
+
     def _get_display_value(self, setting: SettingDefinition) -> str:
-        match setting["key"]:
+        key = setting["key"]
+        value = ""
+
+        match key:
             case "provider":
-                return self._current_provider().display_name
+                value = self._current_provider().display_name
             case "active_model":
                 alias = self._current_model_alias()
                 model = next(
                     model for model in self._current_models() if model.alias == alias
                 )
-                return model.display_name
-            case "api_key":
-                provider = self._current_provider()
-                secret = (
-                    self.env_updates.get(provider.api_key_env_var)
-                    or get_saved_api_key(provider.api_key_env_var)
+                value = model.display_name
+            case "api_key" | "tavily_api_key":
+                value = mask_secret(self._get_secret_value(key))
+            case "web_search_provider":
+                raw_value = self.changes.get(key) or self._get_tool_setting(
+                    "web_search", "provider_preference", "auto"
                 )
-                return mask_secret(secret)
-            case key if key in self.changes:
-                return self.changes[key]
-            case key:
+                value = _WEB_SEARCH_PROVIDER_LABELS.get(raw_value, raw_value)
+            case "web_fetch_provider":
+                raw_value = self.changes.get(key) or self._get_tool_setting(
+                    "web_fetch", "provider_preference", "auto"
+                )
+                value = _WEB_FETCH_PROVIDER_LABELS.get(raw_value, raw_value)
+            case _ if key in self.changes:
+                value = self.changes[key]
+            case _:
                 raw_value = getattr(self.config, key, "")
                 if isinstance(raw_value, bool):
-                    return "On" if raw_value else "Off"
-                return str(raw_value)
+                    value = "On" if raw_value else "Off"
+                else:
+                    value = str(raw_value)
+
+        return value
 
     def _update_display(self) -> None:
         self._build_settings()
@@ -215,10 +290,9 @@ class ConfigApp(Container):
             )
 
         if self.help_widget:
-            if self._editing_secret:
-                provider = self._current_provider()
+            if self._editing_secret and (env_var := self._selected_secret_env_var()):
                 self.help_widget.update(
-                    f"Enter stores {provider.api_key_env_var} in ~/.malibu/.env  ESC cancels"
+                    f"Enter stores {env_var} in ~/.malibu/.env  ESC cancels"
                 )
             else:
                 self.help_widget.update("↑↓ navigate  Space/Enter toggle  ESC exit")
@@ -236,13 +310,13 @@ class ConfigApp(Container):
         self._update_display()
 
     def action_toggle_setting(self) -> None:
-        setting = self.settings[self.selected_index]
+        setting = self._selected_setting()
         match setting["key"]:
             case "provider":
                 self._cycle_provider(setting["options"])
             case "active_model":
                 self._cycle_model()
-            case "api_key":
+            case "api_key" | "tavily_api_key":
                 self._open_secret_editor()
             case _:
                 self._cycle_plain_setting(setting)
@@ -291,14 +365,11 @@ class ConfigApp(Container):
     def _open_secret_editor(self) -> None:
         if self.secret_input is None:
             return
-        provider = self._current_provider()
-        current_value = (
-            self.env_updates.get(provider.api_key_env_var)
-            or get_saved_api_key(provider.api_key_env_var)
-            or ""
-        )
+        if not (env_var := self._selected_secret_env_var()):
+            return
+        current_value = self._get_secret_value(self._selected_setting()["key"]) or ""
         self.secret_input.value = current_value
-        self.secret_input.placeholder = f"Set {provider.api_key_env_var}"
+        self.secret_input.placeholder = f"Set {env_var}"
         self.secret_input.remove_class("hidden")
         self.secret_input.focus()
         self._editing_secret = True
@@ -306,13 +377,49 @@ class ConfigApp(Container):
     def action_cycle(self) -> None:
         self.action_toggle_setting()
 
-    def _convert_changes_for_save(self) -> dict[str, str | bool]:
-        result: dict[str, str | bool] = {}
+    @staticmethod
+    def _merge_save_update(target: dict[str, object], source: dict[str, object]) -> None:
+        for key, value in source.items():
+            existing_value = target.get(key)
+            if isinstance(existing_value, dict) and isinstance(value, dict):
+                ConfigApp._merge_save_update(existing_value, value)
+                continue
+            target[key] = value
+
+    def _convert_changes_for_save(self) -> dict[str, object]:
+        result: dict[str, object] = {}
         for key, value in self.changes.items():
-            if value in {"On", "Off"}:
-                result[key] = value == "On"
-            else:
-                result[key] = value
+            match key:
+                case "active_model":
+                    result[key] = value
+                case "autocopy_to_clipboard" | "file_watcher_for_autocomplete":
+                    result[key] = value == "On"
+                case "web_search_provider":
+                    self._merge_save_update(
+                        result,
+                        {
+                            "tools": {
+                                "web_search": {
+                                    "provider_preference": _WEB_SEARCH_PROVIDER_VALUES.get(
+                                        value, value.lower()
+                                    )
+                                }
+                            }
+                        },
+                    )
+                case "web_fetch_provider":
+                    self._merge_save_update(
+                        result,
+                        {
+                            "tools": {
+                                "web_fetch": {
+                                    "provider_preference": _WEB_FETCH_PROVIDER_VALUES.get(
+                                        value, value.lower()
+                                    )
+                                }
+                            }
+                        },
+                    )
         return result
 
     def action_close(self) -> None:
@@ -336,10 +443,14 @@ class ConfigApp(Container):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if self.secret_input is None or event.input != self.secret_input:
             return
-        provider = self._current_provider()
+        if not (env_var := self._selected_secret_env_var()):
+            self._close_secret_editor()
+            return
         value = event.value.strip()
         if value:
-            self.env_updates[provider.api_key_env_var] = value
+            self.env_updates[env_var] = value
+        elif env_var in self.env_updates:
+            self.env_updates.pop(env_var)
         self._close_secret_editor()
 
     def on_blur(self, event: events.Blur) -> None:

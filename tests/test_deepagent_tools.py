@@ -79,6 +79,61 @@ def test_deepagent_runtime_builds_skill_mounts_from_vibe_discovery(
     assert runtime._build_skill_sources(mounts) == [mount.source for mount in mounts]
 
 
+def test_deepagent_runtime_mounts_active_agent_builtin_skill_scope() -> None:
+    config = build_test_vibe_config(
+        system_prompt_id="tests",
+        include_project_context=False,
+        include_prompt_detail=False,
+    )
+    agent_loop = build_test_agent_loop(
+        config=config, agent_name=BuiltinAgentName.PLANNER, backend=FakeBackend()
+    )
+    runtime = DeepAgentRuntime(agent_loop)
+
+    mounts = runtime._build_skill_mounts()
+
+    assert any(
+        mount.source_kind == "builtin-agent-skill-scope"
+        and mount.path.name == "planner"
+        and mount.skill_names == ("planner",)
+        for mount in mounts
+    )
+    assert not any(
+        mount.source_kind == "builtin-agent-skill-scope"
+        and mount.path.name == "explore"
+        for mount in mounts
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_langchain_tools_includes_git_snapshot_tools() -> None:
+    agent_loop = build_test_agent_loop(
+        config=build_test_vibe_config(
+            system_prompt_id="tests",
+            include_project_context=False,
+            include_prompt_detail=False,
+        ),
+        backend=FakeBackend(),
+    )
+
+    emitted_events: list[BaseEvent] = []
+
+    async def emit_event(event: BaseEvent) -> None:
+        emitted_events.append(event)
+
+    tools = build_langchain_tools(
+        agent_loop,
+        emit_event=emit_event,
+        on_tool_started=lambda: None,
+        on_tool_finished=lambda: None,
+    )
+
+    tool_names = {tool.name for tool in tools}
+    assert "git" in tool_names
+    assert "git_worktree" in tool_names
+    assert "snapshot" in tool_names
+
+
 @pytest.mark.asyncio
 async def test_langchain_tool_runner_accepts_missing_tool_call_id(
     tmp_path: Path,
@@ -132,21 +187,13 @@ async def test_deepagent_runtime_emits_tool_events_for_vibe_tools(
         id="tc_read_file",
         index=0,
         function=FunctionCall(
-            name="read_file",
-            arguments=json.dumps({"path": str(file_path)}),
+            name="read_file", arguments=json.dumps({"path": str(file_path)})
         ),
     )
-    backend = FakeBackend(
-        [
-            [
-                mock_llm_chunk(
-                    content="I will inspect the file.",
-                    tool_calls=[tool_call],
-                )
-            ],
-            [mock_llm_chunk(content="The file says hello from runtime.")],
-        ]
-    )
+    backend = FakeBackend([
+        [mock_llm_chunk(content="I will inspect the file.", tool_calls=[tool_call])],
+        [mock_llm_chunk(content="The file says hello from runtime.")],
+    ])
     agent_loop = build_test_agent_loop(
         config=_make_read_file_config(),
         agent_name=BuiltinAgentName.AUTO_APPROVE,
@@ -162,11 +209,11 @@ async def test_deepagent_runtime_emits_tool_events_for_vibe_tools(
         for event in events
     )
 
-    tool_results = [
-        event for event in events if isinstance(event, ToolResultEvent)
-    ]
+    tool_results = [event for event in events if isinstance(event, ToolResultEvent)]
     assert any(
-        event.tool_name == "read_file" and event.error is None and event.result is not None
+        event.tool_name == "read_file"
+        and event.error is None
+        and event.result is not None
         for event in tool_results
     )
 
@@ -182,8 +229,7 @@ async def test_deepagent_runtime_emits_tool_events_for_vibe_tools(
     reason="DeepAgent runtime dependencies are not installed",
 )
 async def test_deepagent_runtime_logs_explicit_contract(
-    tmp_working_directory: Path,
-    caplog: pytest.LogCaptureFixture,
+    tmp_working_directory: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     trusted_folders_manager.add_trusted(tmp_working_directory)
     agents_skills_dir = tmp_working_directory / ".agents" / "skills"
@@ -195,9 +241,7 @@ async def test_deepagent_runtime_logs_explicit_contract(
         include_prompt_detail=False,
     )
     agent_loop = build_test_agent_loop(
-        config=config,
-        agent_name=BuiltinAgentName.AUTO_APPROVE,
-        backend=FakeBackend(),
+        config=config, agent_name=BuiltinAgentName.AUTO_APPROVE, backend=FakeBackend()
     )
     runtime = DeepAgentRuntime(agent_loop)
 
@@ -221,13 +265,11 @@ async def test_deepagent_runtime_logs_explicit_contract(
 
     log_messages = [record.getMessage() for record in caplog.records]
     assert any(
-        "Configured DeepAgent runtime orchestrator=langchain.create_agent"
-        in message
+        "Configured DeepAgent runtime orchestrator=langchain.create_agent" in message
         for message in log_messages
     )
     assert any(
-        "Mounted DeepAgent skill source kind=project-agents-skills"
-        in message
+        "Mounted DeepAgent skill source kind=project-agents-skills" in message
         and str(agents_skills_dir.resolve()) in message
         for message in log_messages
     )

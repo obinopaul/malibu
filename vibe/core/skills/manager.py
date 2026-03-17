@@ -6,25 +6,43 @@ from typing import TYPE_CHECKING
 
 from vibe.core.config.harness_files import get_harness_files_manager
 from vibe.core.logger import logger
+from vibe.core.paths import BUILTIN_SKILLS_DIR
 from vibe.core.skills.models import SkillInfo, SkillMetadata
 from vibe.core.skills.parser import SkillParseError, parse_frontmatter
 from vibe.core.utils import name_matches
 
 if TYPE_CHECKING:
+    from vibe.core.agents.models import AgentProfile
     from vibe.core.config import VibeConfig
 
 
 class SkillManager:
-    def __init__(self, config_getter: Callable[[], VibeConfig]) -> None:
+    def __init__(
+        self,
+        config_getter: Callable[[], VibeConfig],
+        active_agent_getter: Callable[[], AgentProfile | None] | None = None,
+    ) -> None:
         self._config_getter = config_getter
+        self._active_agent_getter = active_agent_getter or (lambda: None)
         self._search_paths = self._compute_search_paths(self._config)
         self._available: dict[str, SkillInfo] = self._discover_skills()
+        self._builtin_scoped: dict[str, dict[str, SkillInfo]] = (
+            self._discover_builtin_scoped_skills()
+        )
 
         if self._available:
             logger.info(
                 "Discovered %d skill(s) from %d search path(s)",
                 len(self._available),
                 len(self._search_paths),
+            )
+        if builtin_count := sum(
+            len(skills) for skills in self._builtin_scoped.values()
+        ):
+            logger.info(
+                "Discovered %d built-in agent skill(s) across %d scope(s)",
+                builtin_count,
+                len(self._builtin_scoped),
             )
 
     @property
@@ -33,19 +51,32 @@ class SkillManager:
 
     @property
     def available_skills(self) -> dict[str, SkillInfo]:
+        skills = dict(self._available)
+        if scope := self._active_builtin_skill_scope:
+            for name, info in self._builtin_scoped.get(scope, {}).items():
+                skills.setdefault(name, info)
+        return self._filter_skills(skills)
+
+    @property
+    def _active_builtin_skill_scope(self) -> str | None:
+        if not (agent := self._active_agent_getter()):
+            return None
+        return agent.builtin_skill_scope
+
+    def _filter_skills(self, skills: dict[str, SkillInfo]) -> dict[str, SkillInfo]:
         if self._config.enabled_skills:
             return {
                 name: info
-                for name, info in self._available.items()
+                for name, info in skills.items()
                 if name_matches(name, self._config.enabled_skills)
             }
         if self._config.disabled_skills:
             return {
                 name: info
-                for name, info in self._available.items()
+                for name, info in skills.items()
                 if not name_matches(name, self._config.disabled_skills)
             }
-        return dict(self._available)
+        return skills
 
     @staticmethod
     def _compute_search_paths(config: VibeConfig) -> list[Path]:
@@ -83,6 +114,19 @@ class SkillManager:
                         skills[name].skill_path,
                     )
         return skills
+
+    def _discover_builtin_scoped_skills(self) -> dict[str, dict[str, SkillInfo]]:
+        builtin_root = BUILTIN_SKILLS_DIR.path
+        if not builtin_root.is_dir():
+            return {}
+
+        scoped: dict[str, dict[str, SkillInfo]] = {}
+        for scope_dir in builtin_root.iterdir():
+            if not scope_dir.is_dir():
+                continue
+            if scoped_skills := self._discover_skills_in_dir(scope_dir):
+                scoped[scope_dir.name] = scoped_skills
+        return scoped
 
     def _discover_skills_in_dir(self, base: Path) -> dict[str, SkillInfo]:
         skills: dict[str, SkillInfo] = {}

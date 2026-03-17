@@ -144,6 +144,9 @@ class TestAgentProfile:
     def test_explore_is_subagent(self) -> None:
         assert BUILTIN_AGENTS[BuiltinAgentName.EXPLORE].agent_type == AgentType.SUBAGENT
 
+    def test_planner_is_subagent(self) -> None:
+        assert BUILTIN_AGENTS[BuiltinAgentName.PLANNER].agent_type == AgentType.SUBAGENT
+
     def test_agents(self) -> None:
         agents = [
             name
@@ -213,6 +216,9 @@ class TestAgentProfileOverrides:
     def test_plan_agent_restricts_tools(self) -> None:
         overrides = BUILTIN_AGENTS[BuiltinAgentName.PLAN].overrides
         assert "tools" in overrides
+        assert overrides["system_prompt_id"] == "planner"
+        assert "todo" in overrides["enabled_tools"]
+        assert "task" in overrides["enabled_tools"]
         tools = overrides["tools"]
         assert "write_file" in tools
         assert "search_replace" in tools
@@ -220,6 +226,17 @@ class TestAgentProfileOverrides:
         assert tools["search_replace"]["permission"] == "never"
         assert len(tools["write_file"]["allowlist"]) > 0
         assert len(tools["search_replace"]["allowlist"]) > 0
+
+    def test_subagents_have_builtin_skill_scopes(self) -> None:
+        assert BUILTIN_AGENTS[BuiltinAgentName.EXPLORE].builtin_skill_scope == "explore"
+        assert BUILTIN_AGENTS[BuiltinAgentName.PLAN].builtin_skill_scope == "planner"
+        assert BUILTIN_AGENTS[BuiltinAgentName.PLANNER].builtin_skill_scope == "planner"
+
+    def test_planner_subagent_uses_planner_prompt(self) -> None:
+        overrides = BUILTIN_AGENTS[BuiltinAgentName.PLANNER].overrides
+        assert overrides["system_prompt_id"] == "planner"
+        assert "task" in overrides["enabled_tools"]
+        assert "todo" in overrides["enabled_tools"]
 
     def test_accept_edits_agent_sets_tool_permissions(self) -> None:
         overrides = BUILTIN_AGENTS[BuiltinAgentName.ACCEPT_EDITS].overrides
@@ -324,16 +341,14 @@ class TestAgentSwitchAgent:
         await agent.switch_agent(BuiltinAgentName.PLAN)
 
         plan_tool_names = set(agent.tool_manager.available_tools.keys())
-        # Plan mode now has all tools available but with restricted permissions
-        assert "write_file" in plan_tool_names
-        assert "search_replace" in plan_tool_names
+        # Plan mode is restricted to read-only planning tools.
         assert "grep" in plan_tool_names
         assert "read_file" in plan_tool_names
+        assert "todo" in plan_tool_names
+        assert "task" in plan_tool_names
+        assert "write_file" not in plan_tool_names
+        assert "search_replace" not in plan_tool_names
         assert agent.agent_profile.name == BuiltinAgentName.PLAN
-
-        # Verify write tools have "never" base permission
-        write_config = agent.tool_manager.get_tool_config("write_file")
-        assert write_config.permission == ToolPermission.NEVER
 
     @pytest.mark.asyncio
     async def test_switch_from_plan_to_default_restores_tools(
@@ -419,9 +434,7 @@ class TestAcceptEditsAgent:
 
 class TestPlanAgentToolRestriction:
     @pytest.mark.asyncio
-    async def test_plan_agent_has_all_tools_with_restricted_write_permissions(
-        self,
-    ) -> None:
+    async def test_plan_agent_is_limited_to_planning_toolset(self) -> None:
         backend = FakeBackend([
             LLMChunk(
                 message=LLMMessage(role=Role.assistant, content="ok"),
@@ -435,20 +448,12 @@ class TestPlanAgentToolRestriction:
 
         tool_names = set(agent.tool_manager.available_tools.keys())
 
-        # Plan mode now has all tools available
         assert "grep" in tool_names
         assert "read_file" in tool_names
-        assert "write_file" in tool_names
-        assert "search_replace" in tool_names
-
-        # But write tools have restricted permissions
-        write_config = agent.tool_manager.get_tool_config("write_file")
-        assert write_config.permission == ToolPermission.NEVER
-        assert len(write_config.allowlist) > 0
-
-        sr_config = agent.tool_manager.get_tool_config("search_replace")
-        assert sr_config.permission == ToolPermission.NEVER
-        assert len(sr_config.allowlist) > 0
+        assert "todo" in tool_names
+        assert "task" in tool_names
+        assert "write_file" not in tool_names
+        assert "search_replace" not in tool_names
 
 
 class TestAgentManagerFiltering:
@@ -535,18 +540,20 @@ class TestAgentManagerFiltering:
         assert "plan" in agents
         assert "auto-approve" in agents
         assert "explore" in agents
+        assert "planner" in agents
 
     def test_get_subagents_respects_filtering(self) -> None:
         config = build_test_vibe_config(
             include_project_context=False,
             include_prompt_detail=False,
-            disabled_agents=["explore"],
+            disabled_agents=["explore", "planner"],
         )
         manager = AgentManager(lambda: config)
 
         subagents = manager.get_subagents()
         names = [a.name for a in subagents]
         assert "explore" not in names
+        assert "planner" not in names
 
 
 class TestAgentLoopInitialization:

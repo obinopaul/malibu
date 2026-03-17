@@ -112,9 +112,10 @@ class TelemetryClient:
         tool_call: ResolvedToolCall,
         status: Literal["success", "failure", "skipped"],
         result: dict[str, Any] | None = None,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         nb_files_created = 0
         nb_files_modified = 0
+        nb_files_deleted = 0
         if status == "success" and result is not None:
             if tool_call.tool_name == "write_file":
                 file_existed = result.get("file_existed", False)
@@ -124,7 +125,11 @@ class TelemetryClient:
                     nb_files_created = 1
             elif tool_call.tool_name == "search_replace":
                 nb_files_modified = 1 if result.get("blocks_applied", 0) > 0 else 0
-        return nb_files_created, nb_files_modified
+            elif tool_call.tool_name == "apply_patch":
+                nb_files_created = len(result.get("created_paths", []))
+                nb_files_modified = len(result.get("modified_paths", []))
+                nb_files_deleted = len(result.get("deleted_paths", []))
+        return nb_files_created, nb_files_modified, nb_files_deleted
 
     def send_tool_call_finished(
         self,
@@ -138,8 +143,8 @@ class TelemetryClient:
         verdict_value = decision.verdict.value if decision else None
         approval_type_value = decision.approval_type.value if decision else None
 
-        nb_files_created, nb_files_modified = self._calculate_file_metrics(
-            tool_call, status, result
+        nb_files_created, nb_files_modified, nb_files_deleted = (
+            self._calculate_file_metrics(tool_call, status, result)
         )
 
         payload = {
@@ -150,6 +155,7 @@ class TelemetryClient:
             "agent_profile_name": agent_profile_name,
             "nb_files_created": nb_files_created,
             "nb_files_modified": nb_files_modified,
+            "nb_files_deleted": nb_files_deleted,
         }
         self.send_telemetry_event("vibe.tool_call_finished", payload)
 

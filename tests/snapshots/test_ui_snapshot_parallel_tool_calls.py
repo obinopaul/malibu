@@ -10,6 +10,7 @@ from textual.widget import Widget
 from tests.snapshots.snap_compare import SnapCompare
 from vibe.cli.textual_ui.handlers.event_handler import EventHandler
 from vibe.cli.textual_ui.widgets.tools import ToolCallMessage
+from vibe.core.tools.builtins._file_tool_utils import FileKind
 from vibe.core.tools.builtins.read_file import ReadFile, ReadFileArgs, ReadFileResult
 from vibe.core.types import ToolCallEvent, ToolResultEvent
 
@@ -37,8 +38,17 @@ class ParallelToolCallsApp(App):
             else:
                 await self._scroll.mount(widget)
 
+        async def mount_live_reasoning_callback(widget: Widget) -> None:
+            await mount_callback(widget)
+
+        async def clear_live_reasoning_callback() -> None:
+            return
+
         self._handler = EventHandler(
-            mount_callback=mount_callback, get_tools_collapsed=lambda: False
+            mount_callback=mount_callback,
+            mount_live_reasoning_callback=mount_live_reasoning_callback,
+            clear_live_reasoning_callback=clear_live_reasoning_callback,
+            get_tools_collapsed=lambda: False,
         )
 
     async def emit_all_tool_calls(self) -> None:
@@ -77,6 +87,8 @@ class ParallelToolCallsApp(App):
                         path=f"/src/file_{i}.py",
                         content=f"# content of file_{i}.py",
                         lines_read=1,
+                        file_kind=FileKind.TEXT,
+                        mime_type="text/x-python",
                         was_truncated=False,
                     ),
                     tool_call_id=f"tc_{i}",
@@ -93,9 +105,7 @@ def test_snapshot_parallel_tool_calls_pending(snap_compare: SnapCompare) -> None
         await pilot.pause(0.1)
 
     assert snap_compare(
-        "test_ui_snapshot_parallel_tool_calls.py:ParallelToolCallsApp",
-        terminal_size=(80, 15),
-        run_before=run_before,
+        ParallelToolCallsApp(), terminal_size=(80, 15), run_before=run_before
     )
 
 
@@ -108,7 +118,5 @@ def test_snapshot_parallel_tool_calls_resolved(snap_compare: SnapCompare) -> Non
         await pilot.pause(0.3)
 
     assert snap_compare(
-        "test_ui_snapshot_parallel_tool_calls.py:ParallelToolCallsApp",
-        terminal_size=(80, 20),
-        run_before=run_before,
+        ParallelToolCallsApp(), terminal_size=(80, 20), run_before=run_before
     )

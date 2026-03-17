@@ -4,7 +4,13 @@ import pytest
 
 from tests.conftest import build_test_vibe_config
 from vibe.core.agents.manager import AgentManager
-from vibe.core.agents.models import BUILTIN_AGENTS, EXPLORE, AgentSafety, AgentType
+from vibe.core.agents.models import (
+    BUILTIN_AGENTS,
+    EXPLORE,
+    PLANNER,
+    AgentSafety,
+    AgentType,
+)
 
 
 class TestAgentProfile:
@@ -26,6 +32,15 @@ class TestAgentProfile:
         """Test that BUILTIN_AGENTS includes explore."""
         assert "explore" in BUILTIN_AGENTS
         assert BUILTIN_AGENTS["explore"] is EXPLORE
+
+    def test_planner_agent_is_subagent(self) -> None:
+        """Test that PLANNER agent has SUBAGENT type."""
+        assert PLANNER.agent_type == AgentType.SUBAGENT
+
+    def test_builtin_agents_contains_planner(self) -> None:
+        """Test that BUILTIN_AGENTS includes planner."""
+        assert "planner" in BUILTIN_AGENTS
+        assert BUILTIN_AGENTS["planner"] is PLANNER
 
 
 class TestAgentManager:
@@ -49,6 +64,7 @@ class TestAgentManager:
         names = [a.name for a in subagents]
 
         assert "explore" in names
+        assert "planner" in names
 
     def test_get_subagents_excludes_agents(self, manager: AgentManager) -> None:
         """Test that AGENT type agents are not returned."""

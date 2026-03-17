@@ -15,6 +15,10 @@ from vibe.core.tools.base import (
     ToolError,
     ToolPermission,
 )
+from vibe.core.tools.builtins._file_tool_utils import (
+    ensure_parent_directory,
+    resolve_tool_path,
+)
 from vibe.core.tools.ui import ToolCallDisplay, ToolResultDisplay, ToolUIData
 from vibe.core.tools.utils import resolve_file_tool_permission
 from vibe.core.types import ToolResultEvent, ToolStreamEvent
@@ -94,31 +98,24 @@ class WriteFile(
         )
 
     def _prepare_and_validate_path(self, args: WriteFileArgs) -> tuple[Path, bool, int]:
-        if not args.path.strip():
-            raise ToolError("Path cannot be empty")
-
         content_bytes = len(args.content.encode("utf-8"))
         if content_bytes > self.config.max_write_bytes:
             raise ToolError(
                 f"Content exceeds {self.config.max_write_bytes} bytes limit"
             )
 
-        file_path = Path(args.path).expanduser()
-        if not file_path.is_absolute():
-            file_path = Path.cwd() / file_path
-        file_path = file_path.resolve()
+        file_path = resolve_tool_path(args.path)
 
         file_existed = file_path.exists()
+        if file_existed and file_path.is_dir():
+            raise ToolError(f"Path is a directory, not a file: {file_path}")
 
         if file_existed and not args.overwrite:
             raise ToolError(
                 f"File '{file_path}' exists. Set overwrite=True to replace."
             )
 
-        if self.config.create_parent_dirs:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-        elif not file_path.parent.exists():
-            raise ToolError(f"Parent directory does not exist: {file_path.parent}")
+        ensure_parent_directory(file_path, create=self.config.create_parent_dirs)
 
         return file_path, file_existed, content_bytes
 

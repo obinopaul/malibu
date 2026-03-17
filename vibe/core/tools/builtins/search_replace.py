@@ -18,6 +18,10 @@ from vibe.core.tools.base import (
     ToolError,
     ToolPermission,
 )
+from vibe.core.tools.builtins._file_tool_utils import (
+    ensure_existing_file,
+    resolve_tool_path,
+)
 from vibe.core.tools.ui import ToolCallDisplay, ToolResultDisplay, ToolUIData
 from vibe.core.tools.utils import resolve_file_tool_permission
 from vibe.core.types import ToolResultEvent, ToolStreamEvent
@@ -168,11 +172,7 @@ class SearchReplace(
     def _prepare_and_validate_args(
         self, args: SearchReplaceArgs
     ) -> tuple[Path, list[SearchReplaceBlock]]:
-        file_path_str = args.file_path.strip()
         content = args.content.strip()
-
-        if not file_path_str:
-            raise ToolError("File path cannot be empty")
 
         if len(content) > self.config.max_content_size:
             raise ToolError(
@@ -183,17 +183,7 @@ class SearchReplace(
         if not content:
             raise ToolError("Empty content provided")
 
-        project_root = Path.cwd()
-        file_path = Path(file_path_str).expanduser()
-        if not file_path.is_absolute():
-            file_path = project_root / file_path
-        file_path = file_path.resolve()
-
-        if not file_path.exists():
-            raise ToolError(f"File does not exist: {file_path}")
-
-        if not file_path.is_file():
-            raise ToolError(f"Path is not a file: {file_path}")
+        file_path = ensure_existing_file(resolve_tool_path(args.file_path))
 
         search_replace_blocks = self._parse_search_replace_blocks(content)
         if not search_replace_blocks:

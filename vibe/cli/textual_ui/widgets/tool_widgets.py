@@ -10,6 +10,8 @@ from textual.widgets import Static
 
 from vibe.cli.textual_ui.ansi_markdown import AnsiMarkdown as Markdown
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
+from vibe.core.tools.builtins._shell_sessions import ShellCommandSnapshot
+from vibe.core.tools.builtins.apply_patch import ApplyPatchArgs, ApplyPatchResult
 from vibe.core.tools.builtins.ask_user_question import AskUserQuestionResult
 from vibe.core.tools.builtins.bash import BashArgs, BashResult
 from vibe.core.tools.builtins.grep import GrepArgs, GrepResult
@@ -19,6 +21,9 @@ from vibe.core.tools.builtins.search_replace import (
     SearchReplaceArgs,
     SearchReplaceResult,
 )
+from vibe.core.tools.builtins.shell_run import ShellRunArgs
+from vibe.core.tools.builtins.shell_stop import ShellStopResult
+from vibe.core.tools.builtins.shell_write import ShellWriteArgs
 from vibe.core.tools.builtins.todo import TodoArgs, TodoResult
 from vibe.core.tools.builtins.write_file import WriteFileArgs, WriteFileResult
 
@@ -54,6 +59,8 @@ def render_diff_line(line: str) -> Static:
     """Render a single diff line with appropriate styling."""
     if line.startswith("---") or line.startswith("+++"):
         return NoMarkupStatic(line, classes="diff-header")
+    elif line.startswith("***"):
+        return NoMarkupStatic(line, classes="diff-header")
     elif line.startswith("-"):
         return NoMarkupStatic(line, classes="diff-removed")
     elif line.startswith("+"):
@@ -62,6 +69,10 @@ def render_diff_line(line: str) -> Static:
         return NoMarkupStatic(line, classes="diff-range")
     else:
         return NoMarkupStatic(line, classes="diff-context")
+
+
+def render_patch_lines(content: str) -> list[Static]:
+    return [render_diff_line(line) for line in content.splitlines()]
 
 
 class ToolApprovalWidget[TArgs: BaseModel](Vertical):
@@ -219,6 +230,22 @@ class SearchReplaceResultWidget(ToolResultWidget[SearchReplaceResult]):
         yield from self._footer()
 
 
+class ApplyPatchApprovalWidget(ToolApprovalWidget[ApplyPatchArgs]):
+    def compose(self) -> ComposeResult:
+        yield from render_patch_lines(self.args.input)
+
+
+class ApplyPatchResultWidget(ToolResultWidget[ApplyPatchResult]):
+    def compose(self) -> ComposeResult:
+        if not self.result:
+            yield from self._footer()
+            return
+        for warning in self.warnings:
+            yield NoMarkupStatic(f"⚠ {warning}", classes="tool-result-warning")
+        yield from render_patch_lines(self.result.patch)
+        yield from self._footer()
+
+
 class TodoApprovalWidget(ToolApprovalWidget[TodoArgs]):
     def compose(self) -> ComposeResult:
         yield NoMarkupStatic(
@@ -276,12 +303,15 @@ class ReadFileApprovalWidget(ToolApprovalWidget[ReadFileArgs]):
 
 class ReadFileResultWidget(ToolResultWidget[ReadFileResult]):
     def compose(self) -> ComposeResult:
-        if self.collapsed:
-            yield from self._footer()
-            return
         if self.result:
             yield NoMarkupStatic(
                 f"Path: {self.result.path}", classes="tool-result-detail"
+            )
+            yield NoMarkupStatic(
+                f"Kind: {self.result.file_kind}", classes="tool-result-detail"
+            )
+            yield NoMarkupStatic(
+                f"MIME: {self.result.mime_type}", classes="tool-result-detail"
             )
         for warning in self.warnings:
             yield NoMarkupStatic(f"⚠ {warning}", classes="tool-result-warning")
@@ -289,9 +319,66 @@ class ReadFileResultWidget(ToolResultWidget[ReadFileResult]):
         if self.result and self.result.content:
             yield NoMarkupStatic("")
             ext = Path(self.result.path).suffix.lstrip(".") or "text"
-            content, truncation_info = _truncate_lines(self.result.content, 10)
+            content, truncation_info = _truncate_lines(
+                self.result.content, 10 if self.collapsed else 50
+            )
             yield Markdown(f"```{ext}\n{content}\n```")
         yield from self._footer(truncation_info)
+
+
+class ShellRunApprovalWidget(ToolApprovalWidget[ShellRunArgs]):
+    def compose(self) -> ComposeResult:
+        yield NoMarkupStatic(
+            f"session_name: {self.args.session_name}", classes="approval-description"
+        )
+        if self.args.run_directory:
+            yield NoMarkupStatic(
+                f"run_directory: {self.args.run_directory}",
+                classes="approval-description",
+            )
+        yield Markdown(f"```bash\n{self.args.command}\n```")
+
+
+class ShellWriteApprovalWidget(ToolApprovalWidget[ShellWriteArgs]):
+    def compose(self) -> ComposeResult:
+        yield NoMarkupStatic(
+            f"session_name: {self.args.session_name}", classes="approval-description"
+        )
+        yield Markdown(f"```text\n{self.args.input}\n```")
+
+
+class ShellResultWidget(ToolResultWidget[ShellCommandSnapshot]):
+    def compose(self) -> ComposeResult:
+        if not self.result:
+            yield from self._footer()
+            return
+        yield NoMarkupStatic(
+            f"session: {self.result.session_name}", classes="tool-result-detail"
+        )
+        yield NoMarkupStatic(f"cwd: {self.result.cwd}", classes="tool-result-detail")
+        state = "running" if self.result.running else "idle"
+        yield NoMarkupStatic(f"state: {state}", classes="tool-result-detail")
+        if self.result.command:
+            yield NoMarkupStatic(
+                f"command: {self.result.command}", classes="tool-result-detail"
+            )
+        if self.result.stdout:
+            yield NoMarkupStatic("")
+            max_lines = 10 if self.collapsed else 50
+            content, truncation_info = _truncate_lines(self.result.stdout, max_lines)
+            yield NoMarkupStatic(content, classes="tool-result-detail")
+            yield from self._footer(truncation_info)
+            return
+        yield NoMarkupStatic("(no content)", classes="tool-result-detail")
+        yield from self._footer()
+
+
+class ShellStopResultWidget(ToolResultWidget[ShellStopResult]):
+    def compose(self) -> ComposeResult:
+        shell_widget = ShellResultWidget(
+            self.result, self.success, self.message, self.collapsed, self.warnings
+        )
+        yield from shell_widget.compose()
 
 
 class GrepApprovalWidget(ToolApprovalWidget[GrepArgs]):
@@ -337,8 +424,11 @@ class AskUserQuestionResultWidget(ToolResultWidget[AskUserQuestionResult]):
 
 
 APPROVAL_WIDGETS: dict[str, type[ToolApprovalWidget]] = {
+    "apply_patch": ApplyPatchApprovalWidget,
     "bash": BashApprovalWidget,
     "read_file": ReadFileApprovalWidget,
+    "shell_run": ShellRunApprovalWidget,
+    "shell_write": ShellWriteApprovalWidget,
     "write_file": WriteFileApprovalWidget,
     "search_replace": SearchReplaceApprovalWidget,
     "grep": GrepApprovalWidget,
@@ -346,8 +436,13 @@ APPROVAL_WIDGETS: dict[str, type[ToolApprovalWidget]] = {
 }
 
 RESULT_WIDGETS: dict[str, type[ToolResultWidget]] = {
+    "apply_patch": ApplyPatchResultWidget,
     "bash": BashResultWidget,
     "read_file": ReadFileResultWidget,
+    "shell_run": ShellResultWidget,
+    "shell_view": ShellResultWidget,
+    "shell_write": ShellResultWidget,
+    "shell_stop": ShellStopResultWidget,
     "write_file": WriteFileResultWidget,
     "search_replace": SearchReplaceResultWidget,
     "grep": GrepResultWidget,

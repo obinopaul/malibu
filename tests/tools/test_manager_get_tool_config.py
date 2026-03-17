@@ -32,6 +32,18 @@ def test_returns_default_config_when_no_overrides(tool_manager):
     assert config.permission == ToolPermission.ASK
 
 
+def test_new_native_tools_are_discovered(tool_manager):
+    available_tools = tool_manager.available_tools
+
+    assert "apply_patch" in available_tools
+    assert "shell_init" in available_tools
+    assert "shell_run" in available_tools
+    assert "shell_view" in available_tools
+    assert "shell_write" in available_tools
+    assert "shell_stop" in available_tools
+    assert "ast_grep" in tool_manager._available
+
+
 def test_merges_user_overrides_with_defaults():
     vibe_config = build_test_vibe_config(
         system_prompt_id="tests",

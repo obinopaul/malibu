@@ -1,5 +1,12 @@
 Use `web_search` to find current information from the web.
-Returns answers with cited sources. Always reference sources when presenting information to the user.
+It uses Tavily first and falls back to DDGS if Tavily is unavailable.
+The Tavily key is `TAVILY_API_KEY`, and the provider preference can be changed in `/config`.
+The result includes:
+- `provider`: which backend served the result
+- `answer`: optional provider-generated answer
+- `hits`: provider-agnostic search hits with title, URL, snippet, and optional score
+
+Always reference the source URLs you rely on when presenting information to the user.
 
 **Query Best Practices:**
 - Avoid relative time terms ("latest", "today", "this week") - resolve to actual dates when possible

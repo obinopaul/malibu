@@ -8,6 +8,7 @@ import pytest
 from tests.mock.utils import collect_result
 from vibe.acp.tools.builtins.read_file import AcpReadFileState, ReadFile
 from vibe.core.tools.base import ToolError
+from vibe.core.tools.builtins._file_tool_utils import FileKind
 from vibe.core.tools.builtins.read_file import (
     ReadFileArgs,
     ReadFileResult,
@@ -98,6 +99,8 @@ class TestAcpReadFileExecution:
         assert result.path == str(test_file)
         assert result.content == "line 1\nline 2\nline 3"
         assert result.lines_read == 3
+        assert result.file_kind is FileKind.TEXT
+        assert result.mime_type == "text/plain"
         assert mock_client._read_text_file_called
         assert mock_client._session_update_called
 

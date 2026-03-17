@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from vibe.core.paths._local_config_walk import walk_local_config_dirs_all
 from vibe.core.paths._vibe_home import (
+    BUILTIN_SKILLS_DIR,
     DEFAULT_TOOL_DIR,
     GLOBAL_ENV_FILE,
     HISTORY_FILE,
@@ -18,6 +19,7 @@ from vibe.core.paths.conventions import AGENTS_MD_FILENAMES
 
 __all__ = [
     "AGENTS_MD_FILENAMES",
+    "BUILTIN_SKILLS_DIR",
     "DEFAULT_TOOL_DIR",
     "GLOBAL_ENV_FILE",
     "HISTORY_FILE",

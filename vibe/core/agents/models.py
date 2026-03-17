@@ -38,6 +38,7 @@ class BuiltinAgentName(StrEnum):
     DEFAULT = "default"
     CHAT = "chat"
     PLAN = "plan"
+    PLANNER = "planner"
     ACCEPT_EDITS = "accept-edits"
     AUTO_APPROVE = "auto-approve"
     EXPLORE = "explore"
@@ -50,6 +51,7 @@ class AgentProfile:
     description: str
     safety: AgentSafety
     agent_type: AgentType = AgentType.AGENT
+    builtin_skill_scope: str | None = None
     overrides: dict[str, Any] = field(default_factory=dict)
 
     def apply_to_config(self, base: VibeConfig) -> VibeConfig:
@@ -68,20 +70,25 @@ class AgentProfile:
             description=data.pop("description", ""),
             safety=AgentSafety(data.pop("safety", AgentSafety.NEUTRAL)),
             agent_type=AgentType(data.pop("agent_type", AgentType.AGENT)),
+            builtin_skill_scope=data.pop("builtin_skill_scope", None),
             overrides=data,
         )
 
 
-CHAT_AGENT_TOOLS = ["grep", "read_file", "ask_user_question", "task"]
+CHAT_AGENT_TOOLS = ["grep", "ast_grep", "read_file", "ask_user_question", "task"]
+EXPLORE_AGENT_TOOLS = ["grep", "ast_grep", "read_file"]
+PLANNER_AGENT_TOOLS = ["grep", "ast_grep", "read_file", "task", "todo"]
 
 
 def _plan_overrides() -> dict[str, Any]:
     plans_pattern = str(PLANS_DIR.path / "*")
     return {
+        "enabled_tools": PLANNER_AGENT_TOOLS,
+        "system_prompt_id": "planner",
         "tools": {
             "write_file": {"permission": "never", "allowlist": [plans_pattern]},
             "search_replace": {"permission": "never", "allowlist": [plans_pattern]},
-        }
+        },
     }
 
 
@@ -94,8 +101,9 @@ DEFAULT = AgentProfile(
 PLAN = AgentProfile(
     BuiltinAgentName.PLAN,
     "Plan",
-    "Read-only agent for exploration and planning",
+    "Read-only planning agent that can delegate exploration work",
     AgentSafety.SAFE,
+    builtin_skill_scope="planner",
     overrides=_plan_overrides(),
 )
 CHAT = AgentProfile(
@@ -112,6 +120,7 @@ ACCEPT_EDITS = AgentProfile(
     AgentSafety.DESTRUCTIVE,
     overrides={
         "tools": {
+            "apply_patch": {"permission": "always"},
             "write_file": {"permission": "always"},
             "search_replace": {"permission": "always"},
         }
@@ -128,10 +137,20 @@ AUTO_APPROVE = AgentProfile(
 EXPLORE = AgentProfile(
     name=BuiltinAgentName.EXPLORE,
     display_name="Explore",
-    description="Read-only subagent for codebase exploration",
+    description="Read-only subagent for deep codebase exploration and explanation",
     safety=AgentSafety.SAFE,
     agent_type=AgentType.SUBAGENT,
-    overrides={"enabled_tools": ["grep", "read_file"], "system_prompt_id": "explore"},
+    builtin_skill_scope="explore",
+    overrides={"enabled_tools": EXPLORE_AGENT_TOOLS, "system_prompt_id": "explore"},
+)
+PLANNER = AgentProfile(
+    name=BuiltinAgentName.PLANNER,
+    display_name="Planner",
+    description="Read-only planning subagent that can delegate exploration to explore",
+    safety=AgentSafety.SAFE,
+    agent_type=AgentType.SUBAGENT,
+    builtin_skill_scope="planner",
+    overrides={"enabled_tools": PLANNER_AGENT_TOOLS, "system_prompt_id": "planner"},
 )
 
 BUILTIN_AGENTS: dict[str, AgentProfile] = {
@@ -140,4 +159,5 @@ BUILTIN_AGENTS: dict[str, AgentProfile] = {
     BuiltinAgentName.ACCEPT_EDITS: ACCEPT_EDITS,
     BuiltinAgentName.AUTO_APPROVE: AUTO_APPROVE,
     BuiltinAgentName.EXPLORE: EXPLORE,
+    BuiltinAgentName.PLANNER: PLANNER,
 }

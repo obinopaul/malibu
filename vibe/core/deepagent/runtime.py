@@ -19,6 +19,7 @@ from vibe.core.deepagent.adapters import (
 )
 from vibe.core.llm.format import APIToolFormatHandler
 from vibe.core.logger import logger
+from vibe.core.paths import BUILTIN_SKILLS_DIR
 from vibe.core.system_prompt import get_universal_system_prompt
 from vibe.core.types import (
     AssistantEvent,
@@ -225,7 +226,9 @@ class DeepAgentRuntime:
             PatchToolCallsMiddleware(),
         ]
         if skill_sources := self._build_skill_sources(skill_mounts):
-            middleware.insert(0, SkillsMiddleware(backend=backend, sources=skill_sources))
+            middleware.insert(
+                0, SkillsMiddleware(backend=backend, sources=skill_sources)
+            )
         return middleware
 
     def _build_skill_mounts(self) -> list[_SkillSourceMount]:
@@ -240,7 +243,9 @@ class DeepAgentRuntime:
                 source_kind=self._classify_skill_source(path),
                 skill_names=tuple(sorted(skill_names)),
             )
-            for path, skill_names in sorted(skills_by_dir.items(), key=lambda item: str(item[0]))
+            for path, skill_names in sorted(
+                skills_by_dir.items(), key=lambda item: str(item[0])
+            )
         ]
 
     @staticmethod
@@ -249,6 +254,9 @@ class DeepAgentRuntime:
 
     def _classify_skill_source(self, skill_dir: Path) -> str:
         resolved_skill_dir = skill_dir.resolve()
+        if resolved_skill_dir.parent == BUILTIN_SKILLS_DIR.path.resolve():
+            return "builtin-agent-skill-scope"
+
         configured_paths = {
             path.resolve() for path in self._loop.config.skill_paths if path.is_dir()
         }

@@ -1,221 +1,189 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import mistralai
 import pytest
 
 from tests.mock.utils import collect_result
-from vibe.core.config import Backend, ProviderConfig
-from vibe.core.tools.base import BaseToolState, InvokeContext, ToolError
-from vibe.core.tools.builtins.websearch import WebSearch, WebSearchArgs, WebSearchConfig
-
-
-def _make_response(
-    content: list | None = None, outputs: list | None = None
-) -> mistralai.ConversationResponse:
-    if outputs is None:
-        outputs = [mistralai.MessageOutputEntry(content=content or [])]
-    return mistralai.ConversationResponse(
-        conversation_id="test",
-        outputs=outputs,
-        usage=mistralai.ConversationUsageInfo(
-            prompt_tokens=10, completion_tokens=20, total_tokens=30
-        ),
-    )
+from vibe.core.tools.base import BaseToolState, ToolError
+from vibe.core.tools.builtins.websearch import (
+    WebSearch,
+    WebSearchArgs,
+    WebSearchConfig,
+    WebSearchProvider,
+)
 
 
 @pytest.fixture
-def websearch(monkeypatch):
-    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
-    config = WebSearchConfig()
-    return WebSearch(config=config, state=BaseToolState())
+def websearch() -> WebSearch:
+    return WebSearch(config=WebSearchConfig(), state=BaseToolState())
 
 
-def test_parse_text_chunks(websearch):
-    response = _make_response(
-        content=[mistralai.TextChunk(text="Hello "), mistralai.TextChunk(text="world")]
+def test_parse_tavily_response(websearch: WebSearch) -> None:
+    result = websearch._parse_tavily_response(
+        "latest docs",
+        {
+            "answer": "Use the official docs.",
+            "results": [
+                {
+                    "title": "Official Docs",
+                    "url": "https://example.com/docs",
+                    "content": "Current API reference",
+                    "score": 0.92,
+                }
+            ],
+        },
     )
-    result = websearch._parse_response(response)
-    assert result.answer == "Hello world"
-    assert result.sources == []
+
+    assert result.provider == "tavily"
+    assert result.answer == "Use the official docs."
+    assert result.hits[0].url == "https://example.com/docs"
+    assert result.hits[0].score == 0.92
 
 
-def test_parse_sources_deduped(websearch):
-    response = _make_response(
-        content=[
-            mistralai.TextChunk(text="Answer"),
-            mistralai.ToolReferenceChunk(
-                tool="web_search", title="Site A", url="https://a.com"
-            ),
-            mistralai.ToolReferenceChunk(
-                tool="web_search", title="Site A duplicate", url="https://a.com"
-            ),
-            mistralai.ToolReferenceChunk(
-                tool="web_search", title="Site B", url="https://b.com"
-            ),
-        ]
+def test_parse_ddgs_response(websearch: WebSearch) -> None:
+    result = websearch._parse_ddgs_response(
+        "search term",
+        [{"title": "Example", "href": "https://example.com", "body": "Snippet"}],
     )
-    result = websearch._parse_response(response)
-    assert result.answer == "Answer"
-    assert len(result.sources) == 2
-    assert result.sources[0].url == "https://a.com"
-    assert result.sources[0].title == "Site A"
-    assert result.sources[1].url == "https://b.com"
 
-
-def test_parse_skips_source_without_url(websearch):
-    response = _make_response(
-        content=[
-            mistralai.TextChunk(text="Answer"),
-            mistralai.ToolReferenceChunk(tool="web_search", title="No URL"),
-        ]
-    )
-    result = websearch._parse_response(response)
-    assert result.sources == []
-
-
-def test_parse_empty_text_raises(websearch):
-    response = _make_response(content=[])
-    with pytest.raises(ToolError, match="No text in agent response"):
-        websearch._parse_response(response)
-
-
-def test_parse_whitespace_only_raises(websearch):
-    response = _make_response(content=[mistralai.TextChunk(text="   ")])
-    with pytest.raises(ToolError, match="No text in agent response"):
-        websearch._parse_response(response)
-
-
-def test_parse_skips_non_message_entries(websearch):
-    response = _make_response(
-        outputs=[
-            mistralai.MessageOutputEntry(content=[mistralai.TextChunk(text="Answer")])
-        ]
-    )
-    result = websearch._parse_response(response)
-    assert result.answer == "Answer"
+    assert result.provider == "ddgs"
+    assert result.answer is None
+    assert result.hits[0].snippet == "Snippet"
 
 
 @pytest.mark.asyncio
-async def test_run_missing_api_key(monkeypatch):
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
-    config = WebSearchConfig()
-    ws = WebSearch(config=config, state=BaseToolState())
-    with pytest.raises(ToolError, match="MISTRAL_API_KEY"):
-        await collect_result(ws.run(WebSearchArgs(query="test")))
-
-
-@pytest.mark.asyncio
-async def test_run_returns_parsed_result(websearch):
-    response = _make_response(
-        content=[
-            mistralai.TextChunk(text="The answer"),
-            mistralai.ToolReferenceChunk(
-                tool="web_search", title="Source", url="https://example.com"
-            ),
-        ]
+async def test_run_uses_tavily_when_key_present(
+    websearch: WebSearch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.resolve_tavily_api_key",
+        lambda *args: "test-key",
     )
 
-    mock_start = AsyncMock(return_value=response)
-    with patch.object(mistralai.Mistral, "beta", create=True) as mock_beta:
-        mock_beta.conversations.start_async = mock_start
-        with patch.object(mistralai.Mistral, "__aenter__", return_value=None):
-            with patch.object(mistralai.Mistral, "__aexit__", return_value=None):
-                result = await collect_result(
-                    websearch.run(WebSearchArgs(query="test query"))
-                )
+    async def fake_tavily_search(**kwargs):
+        return {
+            "answer": "Tavily answer",
+            "results": [
+                {"title": "Result", "url": "https://example.com", "content": "Snippet"}
+            ],
+        }
 
-    assert result.answer == "The answer"
-    assert len(result.sources) == 1
-    assert result.sources[0].url == "https://example.com"
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.tavily_search", fake_tavily_search
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_is_available", lambda: False
+    )
+
+    result = await collect_result(websearch.run(WebSearchArgs(query="latest docs")))
+
+    assert result.provider == "tavily"
+    assert result.answer == "Tavily answer"
+    assert len(result.hits) == 1
 
 
 @pytest.mark.asyncio
-async def test_run_sdk_error_wrapped(websearch):
-    from unittest.mock import Mock
+async def test_run_falls_back_to_ddgs_on_tavily_failure(
+    websearch: WebSearch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.resolve_tavily_api_key",
+        lambda *args: "test-key",
+    )
 
-    import httpx
+    async def failing_tavily(**kwargs):
+        raise ValueError("tavily down")
 
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.status_code = 500
-    mock_response.text = "error"
-    mock_response.headers = httpx.Headers({"content-type": "application/json"})
+    async def fake_ddgs(**kwargs):
+        return [
+            {
+                "title": "Fallback",
+                "href": "https://fallback.example.com",
+                "body": "fallback snippet",
+            }
+        ]
 
-    with patch.object(mistralai.Mistral, "beta", create=True) as mock_beta:
-        mock_beta.conversations.start_async = AsyncMock(
-            side_effect=mistralai.SDKError("API failed", mock_response)
-        )
-        with patch.object(mistralai.Mistral, "__aenter__", return_value=None):
-            with patch.object(mistralai.Mistral, "__aexit__", return_value=None):
-                with pytest.raises(ToolError, match="Mistral API error"):
-                    await collect_result(websearch.run(WebSearchArgs(query="test")))
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.tavily_search", failing_tavily
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_is_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_text_search", fake_ddgs
+    )
 
+    result = await collect_result(websearch.run(WebSearchArgs(query="latest docs")))
 
-def test_resolve_server_url_no_ctx(websearch):
-    assert websearch._resolve_server_url(None) is None
-
-
-def test_resolve_server_url_no_agent_manager(websearch):
-    ctx = InvokeContext(tool_call_id="t1", agent_manager=None)
-    assert websearch._resolve_server_url(ctx) is None
-
-
-def test_resolve_server_url_with_mistral_provider(websearch):
-    config = MagicMock()
-    config.providers = [
-        ProviderConfig(
-            name="mistral",
-            api_base="https://on-prem.example.com/v1",
-            api_key_env_var="MISTRAL_API_KEY",
-            backend=Backend.MISTRAL,
-        )
-    ]
-    agent_manager = MagicMock()
-    agent_manager.config = config
-
-    ctx = InvokeContext(tool_call_id="t1", agent_manager=agent_manager)
-    assert websearch._resolve_server_url(ctx) == "https://on-prem.example.com"
+    assert result.provider == "ddgs"
+    assert result.hits[0].url == "https://fallback.example.com"
 
 
-def test_resolve_server_url_with_default_provider(websearch):
-    config = MagicMock()
-    config.providers = [
-        ProviderConfig(
-            name="mistral",
-            api_base="https://api.mistral.ai/v1",
-            api_key_env_var="MISTRAL_API_KEY",
-            backend=Backend.MISTRAL,
-        )
-    ]
-    agent_manager = MagicMock()
-    agent_manager.config = config
+@pytest.mark.asyncio
+async def test_run_respects_ddgs_provider_preference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websearch = WebSearch(
+        config=WebSearchConfig(provider_preference=WebSearchProvider.DDGS),
+        state=BaseToolState(),
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.resolve_tavily_api_key",
+        lambda *args: "test-key",
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_is_available", lambda: True
+    )
 
-    ctx = InvokeContext(tool_call_id="t1", agent_manager=agent_manager)
-    assert websearch._resolve_server_url(ctx) == "https://api.mistral.ai"
+    async def fake_tavily_search(**kwargs):
+        raise AssertionError("Tavily should not be called first")
+
+    async def fake_ddgs(**kwargs):
+        return [
+            {
+                "title": "Preferred",
+                "href": "https://preferred.example.com",
+                "body": "preferred snippet",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.tavily_search", fake_tavily_search
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_text_search", fake_ddgs
+    )
+
+    result = await collect_result(websearch.run(WebSearchArgs(query="latest docs")))
+
+    assert result.provider == "ddgs"
+    assert result.hits[0].url == "https://preferred.example.com"
 
 
-def test_resolve_server_url_no_mistral_provider(websearch):
-    config = MagicMock()
-    config.providers = [
-        ProviderConfig(name="llamacpp", api_base="http://127.0.0.1:8080/v1")
-    ]
-    agent_manager = MagicMock()
-    agent_manager.config = config
+@pytest.mark.asyncio
+async def test_run_errors_when_no_provider_available(
+    websearch: WebSearch, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.resolve_tavily_api_key", lambda *args: None
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_is_available", lambda: False
+    )
 
-    ctx = InvokeContext(tool_call_id="t1", agent_manager=agent_manager)
-    assert websearch._resolve_server_url(ctx) is None
+    with pytest.raises(ToolError, match="No web search provider is available"):
+        await collect_result(websearch.run(WebSearchArgs(query="latest docs")))
 
 
-def test_is_available_with_key(monkeypatch):
-    monkeypatch.setenv("MISTRAL_API_KEY", "key")
+def test_is_available_with_ddgs_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.resolve_tavily_api_key", lambda *args: None
+    )
+    monkeypatch.setattr(
+        "vibe.core.tools.builtins.websearch.ddgs_is_available", lambda: True
+    )
+
     assert WebSearch.is_available() is True
 
 
-def test_is_available_without_key(monkeypatch):
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
-    assert WebSearch.is_available() is False
-
-
-def test_get_status_text():
+def test_get_status_text() -> None:
     assert WebSearch.get_status_text() == "Searching the web"

@@ -6,6 +6,7 @@ import pytest
 
 from tests.conftest import build_test_vibe_config
 from tests.skills.conftest import create_skill
+from vibe.core.agents.models import BUILTIN_AGENTS, BuiltinAgentName
 from vibe.core.config import VibeConfig
 from vibe.core.skills.manager import SkillManager
 from vibe.core.trusted_folders import trusted_folders_manager
@@ -518,3 +519,46 @@ class TestSkillUserInvocable:
         assert skills["visible-skill"].user_invocable is True
         assert skills["hidden-skill"].user_invocable is False
         assert skills["default-skill"].user_invocable is True
+
+
+class TestScopedBuiltinSkills:
+    def test_explore_scope_includes_only_explore_builtin_skill(
+        self, config: VibeConfig
+    ) -> None:
+        manager = SkillManager(
+            lambda: config,
+            active_agent_getter=lambda: BUILTIN_AGENTS[BuiltinAgentName.EXPLORE],
+        )
+
+        skills = manager.available_skills
+        assert "code-explorer" in skills
+        assert "planner" not in skills
+
+    def test_planner_scope_includes_only_planner_builtin_skill(
+        self, config: VibeConfig
+    ) -> None:
+        manager = SkillManager(
+            lambda: config,
+            active_agent_getter=lambda: BUILTIN_AGENTS[BuiltinAgentName.PLANNER],
+        )
+
+        skills = manager.available_skills
+        assert "planner" in skills
+        assert "code-explorer" not in skills
+
+    def test_switching_active_agent_changes_builtin_overlay(
+        self, config: VibeConfig
+    ) -> None:
+        active_agent = BUILTIN_AGENTS[BuiltinAgentName.DEFAULT]
+        manager = SkillManager(lambda: config, active_agent_getter=lambda: active_agent)
+
+        assert "planner" not in manager.available_skills
+        assert "code-explorer" not in manager.available_skills
+
+        active_agent = BUILTIN_AGENTS[BuiltinAgentName.EXPLORE]
+        assert "code-explorer" in manager.available_skills
+        assert "planner" not in manager.available_skills
+
+        active_agent = BUILTIN_AGENTS[BuiltinAgentName.PLANNER]
+        assert "planner" in manager.available_skills
+        assert "code-explorer" not in manager.available_skills

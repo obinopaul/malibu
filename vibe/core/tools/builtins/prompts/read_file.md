@@ -2,7 +2,11 @@ Use `read_file` to read the content of a file. It's designed to handle large fil
 
 - By default, it reads from the beginning of the file.
 - Use `offset` (line number) and `limit` (number of lines) to read specific parts or chunks of a file. This is efficient for exploring large files.
+- Text files are returned directly.
+- PDFs are converted to extracted text before `offset`/`limit` are applied.
+- Supported images return a text-only metadata summary rather than raw binary data.
 - The result includes `was_truncated: true` if the file content was cut short due to size limits.
+- The result also includes `file_kind` and `mime_type` so you can tell whether you read text, a PDF, or image metadata.
 - This is more efficient than using `bash` with `cat` or `wc`.
 
 **Strategy for large files:**
@@ -14,5 +18,5 @@ Use `read_file` to read the content of a file. It's designed to handle large fil
 
 **Do not read or explore:**
 - Model checkpoint directories or weight files (.bin, .safetensors, .pt, .gguf, optimizer states, etc.)
-- Binary files of any kind
+- Arbitrary binary files. `read_file` will reject unsupported binaries cleanly.
 - Entire directory trees of training runs or large codebases. If the user provides paths to such files, treat them as references. Do not open them unless the user explicitly asks you to inspect a specific file.

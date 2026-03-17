@@ -2,6 +2,7 @@ Use the `bash` tool to run one-off shell commands.
 
 **Key characteristics:**
 - **Stateless**: Each command runs independently in a fresh environment
+- **Best for one-offs**: Use `shell_init` + `shell_run` + `shell_view` + `shell_write` + `shell_stop` for interactive, stateful, or long-running work
 
 **Timeout:**
 - The `timeout` argument controls how long the command can run before being killed
@@ -39,6 +40,12 @@ Use the `bash` tool to run one-off shell commands.
 - Package management: `pip list`, `npm list`
 - Environment checks: `env | grep VAR`, `which python`
 - File metadata: `stat filename`, `file filename`, `wc -l filename`
+
+**Use `shell_*` tools instead of `bash` when:**
+- The command may run for a long time
+- You need to poll progress later
+- You need to send follow-up input to a running process
+- You need shell state to persist between commands (cwd, env, process state)
 
 **Example: Reading a large file efficiently**
 

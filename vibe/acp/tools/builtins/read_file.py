@@ -5,6 +5,7 @@ from pathlib import Path
 from vibe import VIBE_ROOT
 from vibe.acp.tools.base import AcpToolState, BaseAcpTool
 from vibe.core.tools.base import BaseToolState, ToolError
+from vibe.core.tools.builtins._file_tool_utils import FileKind, guess_mime_type
 from vibe.core.tools.builtins.read_file import (
     ReadFile as CoreReadFileTool,
     ReadFileArgs,
@@ -49,5 +50,9 @@ class ReadFile(CoreReadFileTool, BaseAcpTool[AcpReadFileState]):
         was_truncated = args.limit is not None and lines_read >= args.limit
 
         return _ReadResult(
-            lines=content_lines, bytes_read=bytes_read, was_truncated=was_truncated
+            lines=content_lines,
+            bytes_read=bytes_read,
+            was_truncated=was_truncated,
+            file_kind=FileKind.TEXT,
+            mime_type=guess_mime_type(file_path),
         )
