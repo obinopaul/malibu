@@ -273,6 +273,7 @@ class SolidLanguageServer(
         self.language_id = language_id
         self.open_file_buffers: dict[str, LSPFileBuffer] = {}
         self.language = Language(language_id)
+        self.position_encoding = LSPTypes.PositionEncodingKind.UTF16
 
         # initialise symbol caches
         self.cache_dir = (

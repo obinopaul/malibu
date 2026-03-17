@@ -3,3 +3,5 @@ Use `shell_init` to start a persistent shell session before long-running or inte
 - Pick a short stable `session_name`
 - Optionally set `start_directory`
 - After initialization, use `shell_run` to execute commands in that same session
+
+Initialize a persistent bash shell session for command execution.

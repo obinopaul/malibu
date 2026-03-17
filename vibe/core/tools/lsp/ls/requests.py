@@ -131,7 +131,11 @@ class RequestsMixin:
 
     # Some LS cause problems with this, so the call is isolated from the rest to allow overriding in subclasses
     def _send_references_request(
-        self, relative_file_path: str, line: int, column: int
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+        include_declaration: bool = False,
     ) -> list[lsp_types.Location] | None:
         return self.server.send.references(
             {
@@ -141,12 +145,16 @@ class RequestsMixin:
                     )
                 },
                 "position": {"line": line, "character": column},
-                "context": {"includeDeclaration": False},
+                "context": {"includeDeclaration": include_declaration},
             }
         )
 
     def request_references(
-        self, relative_file_path: str, line: int, column: int
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+        include_declaration: bool = False,
     ) -> list[ls_types.Location]:
         """
         Raise a [textDocument/references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references) request to the Language Server
@@ -172,7 +180,10 @@ class RequestsMixin:
         with self.open_file(relative_file_path):
             try:
                 response = self._send_references_request(
-                    relative_file_path, line=line, column=column
+                    relative_file_path,
+                    line=line,
+                    column=column,
+                    include_declaration=include_declaration,
                 )
             except Exception as e:
                 # Catch LSP internal error (-32603) and raise a more informative exception

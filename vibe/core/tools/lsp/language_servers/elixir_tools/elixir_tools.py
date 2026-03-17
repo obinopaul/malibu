@@ -63,12 +63,23 @@ class ElixirTools(SolidLanguageServer):
         )
 
     @override
-    def _send_references_request(self, relative_file_path: str, line: int, column: int) -> list[lsp_types.Location] | None:
+    def _send_references_request(
+        self,
+        relative_file_path: str,
+        line: int,
+        column: int,
+        include_declaration: bool = False,
+    ) -> list[lsp_types.Location] | None:
         """Override to filter out Next LS internal files from references."""
-        from opendev.core.context_engineering.tools.lsp.ls_utils import PathUtils
+        from vibe.core.tools.lsp.ls_utils import PathUtils
 
         # Get the raw response from the parent implementation
-        raw_response = super()._send_references_request(relative_file_path, line, column)
+        raw_response = super()._send_references_request(
+            relative_file_path,
+            line,
+            column,
+            include_declaration=include_declaration,
+        )
 
         if raw_response is None:
             return None

@@ -135,6 +135,36 @@ async def test_build_langchain_tools_includes_git_snapshot_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_langchain_tools_includes_lsp_symbol_tools() -> None:
+    agent_loop = build_test_agent_loop(
+        config=build_test_vibe_config(
+            system_prompt_id="tests",
+            include_project_context=False,
+            include_prompt_detail=False,
+        ),
+        backend=FakeBackend(),
+    )
+
+    async def emit_event(event: BaseEvent) -> None:
+        del event
+
+    tools = build_langchain_tools(
+        agent_loop,
+        emit_event=emit_event,
+        on_tool_started=lambda: None,
+        on_tool_finished=lambda: None,
+    )
+
+    tool_names = {tool.name for tool in tools}
+    assert "find_symbol" in tool_names
+    assert "find_referencing_symbols" in tool_names
+    assert "rename_symbol" in tool_names
+    assert "replace_symbol_body" in tool_names
+    assert "insert_before_symbol" in tool_names
+    assert "insert_after_symbol" in tool_names
+
+
+@pytest.mark.asyncio
 async def test_langchain_tool_runner_accepts_missing_tool_call_id(
     tmp_path: Path,
 ) -> None:

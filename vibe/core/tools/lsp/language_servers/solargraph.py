@@ -44,7 +44,7 @@ class Solargraph(SolidLanguageServer):
         )
         # Override internal language enum for file matching (excludes .erb files)
         # while keeping LSP languageId as "ruby" for protocol compliance
-        from opendev.core.context_engineering.tools.lsp.ls_config import Language
+        from vibe.core.tools.lsp.ls_config import Language
 
         self.language = Language.RUBY_SOLARGRAPH
         self.analysis_complete = threading.Event()
@@ -347,9 +347,11 @@ class Solargraph(SolidLanguageServer):
         log.info(f"Sending init params: {json.dumps(initialize_params, indent=4)}")
         init_response = self.server.send.initialize(initialize_params)
         log.info(f"Received init response: {init_response}")
-        assert init_response["capabilities"]["textDocumentSync"] == 2
-        assert "completionProvider" in init_response["capabilities"]
-        assert init_response["capabilities"]["completionProvider"] == {
+        capabilities = init_response["capabilities"]
+        assert "textDocumentSync" in capabilities
+        assert capabilities["textDocumentSync"] == 2
+        assert "completionProvider" in capabilities
+        assert capabilities["completionProvider"] == {
             "resolveProvider": True,
             "triggerCharacters": [".", ":", "@"],
         }

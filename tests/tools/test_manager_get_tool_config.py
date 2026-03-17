@@ -36,6 +36,12 @@ def test_new_native_tools_are_discovered(tool_manager):
     available_tools = tool_manager.available_tools
 
     assert "apply_patch" in available_tools
+    assert "find_symbol" in available_tools
+    assert "find_referencing_symbols" in available_tools
+    assert "rename_symbol" in available_tools
+    assert "replace_symbol_body" in available_tools
+    assert "insert_before_symbol" in available_tools
+    assert "insert_after_symbol" in available_tools
     assert "shell_init" in available_tools
     assert "shell_run" in available_tools
     assert "shell_view" in available_tools

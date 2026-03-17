@@ -95,6 +95,7 @@ from vibe.core.utils import (
     get_user_cancellation_message,
     is_user_cancellation_event,
 )
+from vibe.core.workspace import canonical_workspace_root
 
 try:
     from vibe.core.teleport.teleport import TeleportService as _TeleportService
@@ -227,6 +228,14 @@ class AgentLoop:
     @property
     def config(self) -> VibeConfig:
         return self.agent_manager.config
+
+    def _tool_workspace_root(self) -> Path:
+        working_directory = None
+        if self.session_logger.session_metadata is not None:
+            working_directory = self.session_logger.session_metadata.environment.get(
+                "working_directory"
+            )
+        return canonical_workspace_root(working_directory)
 
     @property
     def auto_approve(self) -> bool:
@@ -649,6 +658,7 @@ class AgentLoop:
                     tool_call_id=tool_call.call_id,
                     agent_manager=self.agent_manager,
                     session_dir=self.session_logger.session_dir,
+                    workspace_root=self._tool_workspace_root(),
                     entrypoint_metadata=self.entrypoint_metadata,
                     approval_callback=self.approval_callback,
                     user_input_callback=self.user_input_callback,

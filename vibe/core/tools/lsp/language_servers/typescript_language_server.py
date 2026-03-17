@@ -114,12 +114,6 @@ class TypeScriptLanguageServer(SolidLanguageServer):
         is_npm_installed = shutil.which("npm") is not None
         assert is_npm_installed, "npm is not installed or isn't in PATH. Please install npm and try again."
 
-        # Verify both node and npm are installed
-        is_node_installed = shutil.which("node") is not None
-        assert is_node_installed, "node is not installed or isn't in PATH. Please install NodeJS and try again."
-        is_npm_installed = shutil.which("npm") is not None
-        assert is_npm_installed, "npm is not installed or isn't in PATH. Please install npm and try again."
-
         # Install typescript and typescript-language-server if not already installed
         tsserver_ls_dir = os.path.join(cls.ls_resources_dir(solidlsp_settings), "ts-lsp")
         tsserver_executable_path = os.path.join(tsserver_ls_dir, "node_modules", ".bin", "typescript-language-server")
@@ -233,9 +227,11 @@ class TypeScriptLanguageServer(SolidLanguageServer):
         init_response = self.server.send.initialize(initialize_params)
 
         # TypeScript-specific capability checks
-        assert init_response["capabilities"]["textDocumentSync"] == 2
-        assert "completionProvider" in init_response["capabilities"]
-        assert init_response["capabilities"]["completionProvider"] == {
+        capabilities = init_response["capabilities"]
+        assert "textDocumentSync" in capabilities
+        assert capabilities["textDocumentSync"] == 2
+        assert "completionProvider" in capabilities
+        assert capabilities["completionProvider"] == {
             "triggerCharacters": [".", '"', "'", "/", "@", "<"],
             "resolveProvider": True,
         }

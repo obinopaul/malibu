@@ -15,6 +15,12 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
+from vibe.core.tools.lsp.text_document import (
+    InvalidTextLocationError,
+    LoadedTextDocument,
+    position_to_index,
+)
+
 
 class SymbolKind(IntEnum):
     """LSP symbol kinds.
@@ -213,36 +219,25 @@ class Symbol:
         """
         if file_content is None:
             try:
-                file_content = Path(self.file_path).read_text()
+                file_content = LoadedTextDocument.read(Path(self.file_path)).text
             except Exception:
                 return ""
 
-        lines = file_content.splitlines(keepends=True)
-
-        # Handle single-line symbols
-        if self.start_line == self.end_line:
-            if self.start_line < len(lines):
-                line = lines[self.start_line]
-                return line[self.start_character : self.end_character]
+        try:
+            start_index = position_to_index(
+                file_content,
+                line=self.start_line,
+                character=self.start_character,
+            )
+            end_index = position_to_index(
+                file_content,
+                line=self.end_line,
+                character=self.end_character,
+            )
+        except InvalidTextLocationError:
             return ""
 
-        # Multi-line symbol
-        body_lines = []
-
-        for i in range(self.start_line, min(self.end_line + 1, len(lines))):
-            line = lines[i]
-
-            if i == self.start_line:
-                # First line - start from character offset
-                body_lines.append(line[self.start_character :])
-            elif i == self.end_line:
-                # Last line - end at character offset
-                body_lines.append(line[: self.end_character])
-            else:
-                # Middle lines - include whole line
-                body_lines.append(line)
-
-        return "".join(body_lines)
+        return file_content[start_index:end_index]
 
     def contains_position(self, line: int, character: int) -> bool:
         """Check if a position is within this symbol's range.

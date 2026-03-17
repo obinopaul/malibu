@@ -6,19 +6,42 @@ and our existing symbol tools API.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import logging
-import os
 from pathlib import Path
+from threading import RLock
+import time
 from typing import Any
 
+from vibe.core.workspace import canonical_workspace_root
 from vibe.core.tools.lsp import ls_types
 from vibe.core.tools.lsp.ls import SolidLanguageServer
-from vibe.core.tools.lsp.ls_config import Language
+from vibe.core.tools.lsp.ls_config import Language, LanguageServerConfig
+from vibe.core.tools.lsp.ls_utils import PathUtils
+from vibe.core.tools.lsp.lsp_protocol_handler.lsp_types import PositionEncodingKind
 from vibe.core.tools.lsp.settings import SolidLSPSettings
 
 from .symbol import Symbol, SymbolKind
 
 logger = logging.getLogger(__name__)
+
+_WORKSPACE_SCAN_IGNORE_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    ".vscode",
+    ".idea",
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    "out",
+    "coverage",
+    ".mypy_cache",
+    ".pytest_cache",
+}
 
 # Mapping from file extensions to Language enum
 _EXTENSION_TO_LANGUAGE: dict[str, Language] = {
@@ -106,9 +129,10 @@ class LSPServerWrapper:
             workspace_root: Root directory of the workspace
             settings: Optional solidlsp settings
         """
-        self._workspace_root = Path(workspace_root) if workspace_root else Path.cwd()
+        self._workspace_root = canonical_workspace_root(workspace_root)
         self._settings = settings or SolidLSPSettings()
         self._servers: dict[Language, SolidLanguageServer] = {}
+        self._startup_errors: dict[Language, str] = {}
 
     @property
     def workspace_root(self) -> Path:
@@ -118,7 +142,7 @@ class LSPServerWrapper:
     @workspace_root.setter
     def workspace_root(self, value: Path | str) -> None:
         """Set the workspace root directory."""
-        self._workspace_root = Path(value)
+        self._workspace_root = canonical_workspace_root(value)
 
     def get_server(self, language: Language) -> SolidLanguageServer | None:
         """Get or create a language server for the specified language.
@@ -138,14 +162,16 @@ class LSPServerWrapper:
 
         try:
             server = SolidLanguageServer.create(
-                language=language,
+                config=LanguageServerConfig(code_language=language),
                 repository_root_path=str(self._workspace_root),
-                settings=self._settings,
+                solidlsp_settings=self._settings,
             )
             server.start()
             self._servers[language] = server
+            self._startup_errors.pop(language, None)
             return server
         except Exception as e:
+            self._startup_errors[language] = str(e)
             logger.warning(f"Failed to create {language.name} server: {e}")
             return None
 
@@ -163,6 +189,16 @@ class LSPServerWrapper:
             logger.debug(f"No language server for {file_path}")
             return None
         return self.get_server(language)
+
+    def get_position_encoding(self, file_path: str | Path) -> str:
+        server = self.get_server_for_file(file_path)
+        if server is None:
+            return PositionEncodingKind.UTF16.value
+
+        encoding = getattr(server, "position_encoding", PositionEncodingKind.UTF16)
+        if isinstance(encoding, PositionEncodingKind):
+            return encoding.value
+        return str(encoding)
 
     def get_document_symbols(self, file_path: str | Path) -> list[Symbol]:
         """Get all symbols in a document.
@@ -196,6 +232,7 @@ class LSPServerWrapper:
         file_path: str | Path,
         line: int,
         character: int,
+        include_declaration: bool = True,
     ) -> list[dict[str, Any]]:
         """Find all references to a symbol at position.
 
@@ -203,6 +240,7 @@ class LSPServerWrapper:
             file_path: Path to the file
             line: 0-indexed line number
             character: 0-indexed character offset
+            include_declaration: Whether to include the symbol declaration
 
         Returns:
             List of reference locations
@@ -218,10 +256,15 @@ class LSPServerWrapper:
             relative_path = path
 
         try:
-            locations = server.request_references(str(relative_path), line, character)
+            locations = server.request_references(
+                str(relative_path),
+                line,
+                character,
+                include_declaration=include_declaration,
+            )
             return [
                 {
-                    "file": loc.get("absolutePath", loc.get("uri", "")),
+                    "file": self._normalize_location_path(loc),
                     "line": loc["range"]["start"]["line"] + 1,
                     "character": loc["range"]["start"]["character"],
                     "end_line": loc["range"]["end"]["line"] + 1,
@@ -263,7 +306,7 @@ class LSPServerWrapper:
             locations = server.request_definition(str(relative_path), line, character)
             return [
                 {
-                    "file": loc.get("absolutePath", loc.get("uri", "")),
+                    "file": self._normalize_location_path(loc),
                     "line": loc["range"]["start"]["line"] + 1,
                     "character": loc["range"]["start"]["character"],
                 }
@@ -322,20 +365,33 @@ class LSPServerWrapper:
         Returns:
             List of matching symbols
         """
-        # Try to use Python server first, then others
-        for language in [Language.PYTHON, Language.TYPESCRIPT, Language.GO, Language.RUST]:
+        symbols_by_key: dict[tuple[str, str, int, int, int], Symbol] = {}
+        for language in self._iter_workspace_search_languages():
             server = self.get_server(language)
             if server is None:
                 continue
 
             try:
-                symbols = server.request_workspace_symbol(query)
-                if symbols:
-                    return self._convert_unified_symbols(symbols, "")
+                if not (raw_symbols := server.request_workspace_symbol(query)):
+                    continue
+
+                for symbol in self._convert_unified_symbols(raw_symbols, ""):
+                    key = (
+                        symbol.file_path,
+                        symbol.name_path,
+                        symbol.start_line,
+                        symbol.start_character,
+                        int(symbol.kind),
+                    )
+                    symbols_by_key.setdefault(key, symbol)
             except Exception as e:
                 logger.debug(f"Workspace symbol search failed for {language}: {e}")
 
-        return []
+        return list(symbols_by_key.values())
+
+    def get_last_startup_error(self, language: Language) -> str | None:
+        """Return the most recent startup error for a language server, if any."""
+        return self._startup_errors.get(language)
 
     def get_diagnostics(
         self,
@@ -434,7 +490,7 @@ class LSPServerWrapper:
                 if abs_path:
                     sym_file = abs_path
                 elif location.get("uri", "").startswith("file://"):
-                    sym_file = location["uri"][7:]
+                    sym_file = PathUtils.uri_to_path(location["uri"])
 
             symbol = Symbol(
                 name=usym["name"],
@@ -459,6 +515,62 @@ class LSPServerWrapper:
 
         return symbols
 
+    @staticmethod
+    def _normalize_location_path(location: Any) -> str:
+        absolute_path = location.get("absolutePath")
+        if isinstance(absolute_path, str) and absolute_path:
+            return absolute_path
+
+        uri = location.get("uri", "")
+        if isinstance(uri, str) and uri.startswith("file://"):
+            return PathUtils.uri_to_path(uri)
+        return str(uri)
+
+    def _iter_workspace_search_languages(self) -> list[Language]:
+        preferred_languages = [
+            language
+            for language in self._discover_workspace_languages()
+            if not language.is_experimental()
+        ]
+        if not preferred_languages:
+            preferred_languages = [Language.PYTHON, Language.TYPESCRIPT]
+
+        return list(dict.fromkeys([
+            *self._servers.keys(),
+            *preferred_languages,
+        ]))
+
+    def _discover_workspace_languages(self) -> list[Language]:
+        discovered: set[Language] = set()
+        pending_dirs = [self._workspace_root]
+
+        while pending_dirs:
+            current_dir = pending_dirs.pop()
+            try:
+                entries = list(current_dir.iterdir())
+            except OSError:
+                continue
+
+            for entry in entries:
+                if entry.is_dir():
+                    if self._should_skip_workspace_dir(entry):
+                        continue
+                    pending_dirs.append(entry)
+                    continue
+
+                if (language := get_language_from_path(entry)) is not None:
+                    discovered.add(language)
+
+        ordered_languages = list(Language.iter_all(include_experimental=True))
+        return [language for language in ordered_languages if language in discovered]
+
+    @staticmethod
+    def _should_skip_workspace_dir(path: Path) -> bool:
+        name = path.name
+        if name in _WORKSPACE_SCAN_IGNORE_DIRS:
+            return True
+        return name.startswith(".") and name not in {".github"}
+
     def _parse_workspace_edit(
         self,
         workspace_edit: ls_types.WorkspaceEdit,
@@ -476,9 +588,9 @@ class LSPServerWrapper:
         try:
             changes = extract_text_edits(workspace_edit)
             for uri, edits in changes.items():
-                file_path = uri
-                if file_path.startswith("file://"):
-                    file_path = file_path[7:]
+                file_path = (
+                    PathUtils.uri_to_path(uri) if uri.startswith("file://") else uri
+                )
 
                 parsed_edits = []
                 for edit in edits:
@@ -498,30 +610,58 @@ class LSPServerWrapper:
         return result
 
 
-# Global wrapper instance
-_wrapper: LSPServerWrapper | None = None
+@dataclass(slots=True)
+class _WrapperState:
+    wrapper: LSPServerWrapper
+    last_used_at: float = field(default_factory=time.monotonic)
+
+
+class LSPWrapperRegistry:
+    def __init__(self) -> None:
+        self._wrappers: dict[Path, _WrapperState] = {}
+        self._lock = RLock()
+
+    def get_wrapper(self, workspace_root: str | Path | None = None) -> LSPServerWrapper:
+        root = canonical_workspace_root(workspace_root)
+        with self._lock:
+            if (state := self._wrappers.get(root)) is None:
+                state = _WrapperState(wrapper=LSPServerWrapper(workspace_root=root))
+                self._wrappers[root] = state
+            state.last_used_at = time.monotonic()
+            return state.wrapper
+
+    def shutdown(self, workspace_root: str | Path | None = None) -> None:
+        with self._lock:
+            if workspace_root is None:
+                states = list(self._wrappers.values())
+                self._wrappers.clear()
+            else:
+                root = canonical_workspace_root(workspace_root)
+                state = self._wrappers.pop(root, None)
+                states = [state] if state is not None else []
+
+        for state in states:
+            state.wrapper.shutdown()
+
+    def clear(self) -> None:
+        self.shutdown()
+
+
+_wrapper_registry = LSPWrapperRegistry()
 
 
 def get_lsp_wrapper(workspace_root: str | Path | None = None) -> LSPServerWrapper:
-    """Get or create the global LSP wrapper.
+    """Get or create a workspace-scoped LSP wrapper.
 
     Args:
-        workspace_root: Optional workspace root to set
+        workspace_root: Optional workspace root
 
     Returns:
         LSPServerWrapper instance
     """
-    global _wrapper
-    if _wrapper is None:
-        _wrapper = LSPServerWrapper(workspace_root=workspace_root)
-    elif workspace_root:
-        _wrapper.workspace_root = Path(workspace_root)
-    return _wrapper
+    return _wrapper_registry.get_wrapper(workspace_root)
 
 
-def shutdown_lsp_wrapper() -> None:
-    """Shutdown the global LSP wrapper."""
-    global _wrapper
-    if _wrapper is not None:
-        _wrapper.shutdown()
-        _wrapper = None
+def shutdown_lsp_wrapper(workspace_root: str | Path | None = None) -> None:
+    """Shutdown one workspace wrapper or all registered wrappers."""
+    _wrapper_registry.shutdown(workspace_root)

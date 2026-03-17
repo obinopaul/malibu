@@ -48,6 +48,7 @@ class InvokeContext:
     user_input_callback: UserInputCallback | None = field(default=None)
     sampling_callback: MCPSamplingHandler | None = field(default=None)
     session_dir: Path | None = field(default=None)
+    workspace_root: Path | None = field(default=None)
     entrypoint_metadata: EntrypointMetadata | None = field(default=None)
     plan_file_path: Path | None = field(default=None)
     switch_agent_callback: SwitchAgentCallback | None = field(default=None)

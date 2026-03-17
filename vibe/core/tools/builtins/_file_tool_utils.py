@@ -42,13 +42,13 @@ class LineSlice:
     was_truncated: bool
 
 
-def resolve_tool_path(path_str: str) -> Path:
+def resolve_tool_path(path_str: str, *, base_dir: Path | None = None) -> Path:
     if not path_str.strip():
         raise ToolError("Path cannot be empty")
 
     path = Path(path_str).expanduser()
     if not path.is_absolute():
-        path = Path.cwd() / path
+        path = (base_dir or Path.cwd()) / path
 
     try:
         return path.resolve(strict=False)

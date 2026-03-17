@@ -18,12 +18,14 @@ import requests
 
 from vibe.core.tools.lsp.ls_exceptions import SolidLSPException
 from vibe.core.tools.lsp.ls_types import UnifiedSymbolInformation
+from vibe.core.tools.lsp.text_document import (
+    InvalidTextLocationError,
+    count_position_units,
+    index_to_position,
+    position_to_index,
+)
 
 log = logging.getLogger(__name__)
-
-
-class InvalidTextLocationError(Exception):
-    pass
 
 
 class TextUtils:
@@ -36,33 +38,14 @@ class TextUtils:
         """
         Returns the zero-indexed line and column number of the given index in the given text
         """
-        l = 0
-        c = 0
-        idx = 0
-        while idx < index:
-            if text[idx] == "\n":
-                l += 1
-                c = 0
-            else:
-                c += 1
-            idx += 1
-
-        return l, c
+        return index_to_position(text, index)
 
     @staticmethod
     def get_index_from_line_col(text: str, line: int, col: int) -> int:
         """
         Returns the index of the given zero-indexed line and column number in the given text
         """
-        idx = 0
-        while line > 0:
-            if idx >= len(text):
-                raise InvalidTextLocationError
-            if text[idx] == "\n":
-                line -= 1
-            idx += 1
-        idx += col
-        return idx
+        return position_to_index(text, line=line, character=col)
 
     @staticmethod
     def _get_updated_position_from_line_and_column_and_edit(l: int, c: int, text_to_be_inserted: str) -> tuple[int, int]:
@@ -72,9 +55,9 @@ class TextUtils:
         num_newlines_in_gen_text = text_to_be_inserted.count("\n")
         if num_newlines_in_gen_text > 0:
             l += num_newlines_in_gen_text
-            c = len(text_to_be_inserted.split("\n")[-1])
+            c = count_position_units(text_to_be_inserted.split("\n")[-1])
         else:
-            c += len(text_to_be_inserted)
+            c += count_position_units(text_to_be_inserted)
         return (l, c)
 
     @staticmethod

@@ -35,8 +35,6 @@ class SymbolRetriever:
             workspace_root: Workspace root directory
         """
         self._wrapper = get_lsp_wrapper(workspace_root)
-        if workspace_root:
-            self._wrapper.workspace_root = Path(workspace_root)
 
     @property
     def workspace_root(self) -> Path | None:
@@ -123,7 +121,12 @@ class SymbolRetriever:
         Returns:
             List of reference locations with file, line, character info
         """
-        return self._wrapper.find_references(file_path, line, character)
+        return self._wrapper.find_references(
+            file_path,
+            line,
+            character,
+            include_declaration=include_declaration,
+        )
 
     def find_references_by_name(
         self,
