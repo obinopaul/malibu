@@ -36,12 +36,9 @@ class AgentType(StrEnum):
 
 class BuiltinAgentName(StrEnum):
     DEFAULT = "default"
-    CHAT = "chat"
     PLAN = "plan"
-    PLANNER = "planner"
     ACCEPT_EDITS = "accept-edits"
     AUTO_APPROVE = "auto-approve"
-    EXPLORE = "explore"
 
 
 @dataclass(frozen=True)
@@ -75,15 +72,13 @@ class AgentProfile:
         )
 
 
-CHAT_AGENT_TOOLS = ["grep", "ast_grep", "read_file", "ask_user_question", "task"]
-EXPLORE_AGENT_TOOLS = ["grep", "ast_grep", "read_file"]
-PLANNER_AGENT_TOOLS = ["grep", "ast_grep", "read_file", "task", "todo"]
+PLAN_AGENT_TOOLS = ["grep", "ast_grep", "read_file", "task", "todo"]
 
 
 def _plan_overrides() -> dict[str, Any]:
     plans_pattern = str(PLANS_DIR.path / "*")
     return {
-        "enabled_tools": PLANNER_AGENT_TOOLS,
+        "enabled_tools": PLAN_AGENT_TOOLS,
         "system_prompt_id": "planner",
         "tools": {
             "write_file": {"permission": "never", "allowlist": [plans_pattern]},
@@ -106,13 +101,6 @@ PLAN = AgentProfile(
     builtin_skill_scope="planner",
     overrides=_plan_overrides(),
 )
-CHAT = AgentProfile(
-    BuiltinAgentName.CHAT,
-    "Chat",
-    "Read-only conversational mode for questions and discussions",
-    AgentSafety.SAFE,
-    overrides={"auto_approve": True, "enabled_tools": CHAT_AGENT_TOOLS},
-)
 ACCEPT_EDITS = AgentProfile(
     BuiltinAgentName.ACCEPT_EDITS,
     "Accept Edits",
@@ -134,30 +122,9 @@ AUTO_APPROVE = AgentProfile(
     overrides={"auto_approve": True},
 )
 
-EXPLORE = AgentProfile(
-    name=BuiltinAgentName.EXPLORE,
-    display_name="Explore",
-    description="Read-only subagent for deep codebase exploration and explanation",
-    safety=AgentSafety.SAFE,
-    agent_type=AgentType.SUBAGENT,
-    builtin_skill_scope="explore",
-    overrides={"enabled_tools": EXPLORE_AGENT_TOOLS, "system_prompt_id": "explore"},
-)
-PLANNER = AgentProfile(
-    name=BuiltinAgentName.PLANNER,
-    display_name="Planner",
-    description="Read-only planning subagent that can delegate exploration to explore",
-    safety=AgentSafety.SAFE,
-    agent_type=AgentType.SUBAGENT,
-    builtin_skill_scope="planner",
-    overrides={"enabled_tools": PLANNER_AGENT_TOOLS, "system_prompt_id": "planner"},
-)
-
 BUILTIN_AGENTS: dict[str, AgentProfile] = {
     BuiltinAgentName.DEFAULT: DEFAULT,
     BuiltinAgentName.PLAN: PLAN,
     BuiltinAgentName.ACCEPT_EDITS: ACCEPT_EDITS,
     BuiltinAgentName.AUTO_APPROVE: AUTO_APPROVE,
-    BuiltinAgentName.EXPLORE: EXPLORE,
-    BuiltinAgentName.PLANNER: PLANNER,
 }

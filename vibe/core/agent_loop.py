@@ -28,8 +28,6 @@ from vibe.core.llm.format import (
 )
 from vibe.core.llm.types import BackendLike
 from vibe.core.middleware import (
-    CHAT_AGENT_EXIT,
-    CHAT_AGENT_REMINDER,
     PLAN_AGENT_EXIT,
     AutoCompactMiddleware,
     ContextWarningMiddleware,
@@ -384,14 +382,6 @@ class AgentLoop:
                 BuiltinAgentName.PLAN,
                 lambda: make_plan_agent_reminder(self._plan_session.plan_file_path_str),
                 PLAN_AGENT_EXIT,
-            )
-        )
-        self.middleware_pipeline.add(
-            ReadOnlyAgentMiddleware(
-                lambda: self.agent_profile,
-                BuiltinAgentName.CHAT,
-                CHAT_AGENT_REMINDER,
-                CHAT_AGENT_EXIT,
             )
         )
 

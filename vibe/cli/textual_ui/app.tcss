@@ -1097,3 +1097,98 @@ ContextProgress {
     color: ansi_bright_black;
     margin-top: 1;
 }
+
+/* Plan options bottom panel */
+
+#planoptions-app {
+    width: 100%;
+    height: auto;
+    max-height: 70vh;
+    background: transparent;
+    border: solid ansi_bright_black;
+    padding: 0 1;
+    margin: 0;
+}
+
+#planoptions-content {
+    width: 100%;
+    height: auto;
+    dock: bottom;
+}
+
+.plan-options-preview {
+    width: 100%;
+    height: auto;
+    max-height: 50vh;
+    border: none;
+    border-left: wide ansi_bright_black;
+    padding: 0 0 0 1;
+    margin-bottom: 1;
+}
+
+.plan-options-preview-text {
+    width: 100%;
+    height: auto;
+    color: ansi_default;
+    padding: 0;
+    margin: 0;
+
+    & > *:last-child {
+        margin-bottom: 0;
+    }
+}
+
+.plan-options-title {
+    height: auto;
+    text-style: bold;
+    color: ansi_yellow;
+    margin-bottom: 1;
+}
+
+.plan-option {
+    height: auto;
+    color: ansi_default;
+}
+
+.plan-option-cursor-selected {
+    &.plan-option-action {
+        color: ansi_green;
+        text-style: bold;
+    }
+}
+
+.plan-option-dim {
+    &.plan-option-action {
+        color: ansi_green;
+    }
+}
+
+.plan-feedback-row {
+    width: 100%;
+    height: auto;
+}
+
+.plan-feedback-prefix {
+    width: auto;
+    height: auto;
+    color: ansi_default;
+}
+
+.plan-feedback-input {
+    width: 1fr;
+    height: auto;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+.plan-feedback-static {
+    width: auto;
+    height: auto;
+    color: ansi_bright_black;
+}
+
+.plan-options-help {
+    height: auto;
+    color: ansi_bright_black;
+}

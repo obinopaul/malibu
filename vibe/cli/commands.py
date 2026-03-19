@@ -82,6 +82,11 @@ class CommandRegistry:
                 description="Browse and resume past sessions",
                 handler="_show_session_picker",
             ),
+            "plan": Command(
+                aliases=frozenset(["/plan"]),
+                description="Switch to plan mode with a dedicated planning agent",
+                handler="_plan_command",
+            ),
         }
 
         for command in excluded_commands:

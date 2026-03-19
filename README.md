@@ -77,6 +77,7 @@ pip install malibu
   - [Skills System](#skills-system)
     - [Creating Skills](#creating-skills)
     - [Skill Discovery](#skill-discovery)
+    - [Runtime Integration](#runtime-integration)
     - [Managing Skills](#managing-skills)
   - [Configuration](#configuration)
     - [Configuration File Location](#configuration-file-location)
@@ -92,7 +93,7 @@ pip install malibu
     - [Update Settings](#update-settings)
       - [Auto-Update](#auto-update)
     - [Notification Settings](#notification-settings)
-    - [Custom Vibe Home Directory](#custom-vibe-home-directory)
+    - [Custom Malibu Home Directory](#custom-malibu-home-directory)
   - [Editors/IDEs](#editorsides)
   - [Resources](#resources)
   - [Data collection \& usage](#data-collection--usage)
@@ -126,10 +127,21 @@ Vibe comes with several built-in agent profiles, each designed for different use
 - **`accept-edits`**: Auto-approves file edits only (`write_file`, `search_replace`). Useful for code refactoring.
 - **`auto-approve`**: Auto-approves all tool executions. Use with caution.
 
-Use the `--agent` flag to select a different agent:
+Use the `--agent` flag to select a different agent.
+
+If you run Malibu from source with uv, these are the exact commands:
 
 ```bash
-vibe --agent plan
+uv run malibu --agent default
+uv run malibu --agent plan
+uv run malibu --agent accept-edits
+uv run malibu --agent auto-approve
+```
+
+If you installed the binary/tool, use:
+
+```bash
+malibu --agent plan
 ```
 
 ### Subagents and Task Delegation
@@ -141,12 +153,12 @@ The `task` tool allows the agent to delegate work to subagents:
 ```
 > Can you explore the codebase structure while I work on something else?
 
-🤖 I'll use the task tool to delegate this to the explore subagent.
+🤖 I'll use the task tool to delegate this to a custom subagent.
 
-> task(task="Analyze the project structure and architecture", agent="explore")
+> task(task="Analyze the project structure and architecture", agent="my-subagent")
 ```
 
-Create custom subagents by adding `agent_type = "subagent"` to your agent configuration. Vibe comes with a built-in subagent called `explore`, a read-only subagent for codebase exploration used internally for delegation.
+Create custom subagents by adding `agent_type = "subagent"` to your agent configuration.
 
 ### Interactive User Questions
 

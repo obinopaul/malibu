@@ -7,7 +7,7 @@ from typing import ClassVar
 from pydantic import BaseModel, Field
 
 from vibe.core.agent_loop import AgentLoop
-from vibe.core.agents.models import AgentType, BuiltinAgentName
+from vibe.core.agents.models import AgentType
 from vibe.core.config import SessionLoggingConfig, VibeConfig
 from vibe.core.tools.base import (
     BaseTool,
@@ -35,7 +35,7 @@ from vibe.core.types import (
 class TaskArgs(BaseModel):
     task: str = Field(description="The task to delegate to the subagent")
     agent: str = Field(
-        default="explore",
+        default="my-subagent",
         description="Name of the agent profile to use (must be a subagent)",
     )
 
@@ -48,9 +48,7 @@ class TaskResult(BaseModel):
 
 class TaskToolConfig(BaseToolConfig):
     permission: ToolPermission = ToolPermission.ASK
-    allowlist: list[str] = Field(
-        default=[BuiltinAgentName.EXPLORE, BuiltinAgentName.PLANNER]
-    )
+    allowlist: list[str] = Field(default=[])
 
 
 class Task(

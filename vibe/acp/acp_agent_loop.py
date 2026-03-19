@@ -76,7 +76,7 @@ from vibe.acp.utils import (
     make_model_response,
 )
 from vibe.core.agent_loop import AgentLoop
-from vibe.core.agents.models import CHAT as CHAT_AGENT, BuiltinAgentName
+from vibe.core.agents.models import BuiltinAgentName
 from vibe.core.autocompletion.path_prompt_adapter import render_path_prompt
 from vibe.core.config import (
     MissingAPIKeyError,
@@ -254,7 +254,6 @@ class VibeAcpAgentLoop(AcpAgent):
             enable_streaming=True,
             entrypoint_metadata=self._build_entrypoint_metadata(),
         )
-        agent_loop.agent_manager.register_agent(CHAT_AGENT)
         # NOTE: For now, we pin session.id to agent_loop.session_id right after init time.
         # We should just use agent_loop.session_id everywhere, but it can still change during
         # session lifetime (e.g. agent_loop.compact is called).
@@ -463,7 +462,6 @@ class VibeAcpAgentLoop(AcpAgent):
             enable_streaming=True,
             entrypoint_metadata=self._build_entrypoint_metadata(),
         )
-        agent_loop.agent_manager.register_agent(CHAT_AGENT)
 
         non_system_messages = [
             msg for msg in loaded_messages if msg.role != Role.system

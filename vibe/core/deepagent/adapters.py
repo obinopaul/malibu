@@ -451,7 +451,39 @@ async def _invoke_vibe_tool(
 ) -> str:
     on_tool_started()
     try:
-        validated_args = args_model.model_validate(kwargs)
+        try:
+            validated_args = args_model.model_validate(kwargs)
+        except Exception as validation_err:
+            # Build a helpful error that tells the model exactly what args are expected
+            schema = args_model.model_json_schema()
+            required = schema.get("required", [])
+            props = schema.get("properties", {})
+            param_hints = []
+            for prop_name, prop_info in props.items():
+                req_marker = " (REQUIRED)" if prop_name in required else " (optional)"
+                desc = prop_info.get("description", "")
+                ptype = prop_info.get("type", "")
+                param_hints.append(f"  - {prop_name}{req_marker}: {ptype} — {desc}")
+
+            error_msg = (
+                f"Invalid arguments for tool '{tool_name}'. "
+                f"You passed: {json.dumps(kwargs) if kwargs else '(empty)'}\n"
+                f"Validation error: {validation_err}\n\n"
+                f"Expected parameters for '{tool_name}':\n"
+                + "\n".join(param_hints)
+                + "\n\nIMPORTANT: Call tools by name directly (e.g. 'todo', not 'functions.todo'). "
+                "Pass the required arguments as a JSON object."
+            )
+            error_event = ToolResultEvent(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                tool_class=tool_class,
+                error=error_msg,
+                duration=0.0,
+            )
+            await emit_event(error_event)
+            return error_msg
+
         resolved_tool_call = ResolvedToolCall(
             tool_name=tool_name,
             tool_class=tool_class,
@@ -479,6 +511,126 @@ async def _invoke_vibe_tool(
         on_tool_finished()
 
 
+def _build_enhanced_description(
+    tool_name: str,
+    tool_class: type[Any],
+    args_model: type[BaseModel],
+) -> str:
+    """Build a tool description that includes parameter info inline.
+
+    Many LLMs read the description more reliably than the JSON schema,
+    so embedding parameter details here prevents empty-arg tool calls.
+    """
+    base_desc = tool_class.description
+    schema = args_model.model_json_schema()
+    required = set(schema.get("required", []))
+    props = schema.get("properties", {})
+
+    if not props:
+        return base_desc
+
+    param_lines: list[str] = []
+    for prop_name, prop_info in props.items():
+        req_label = "REQUIRED" if prop_name in required else "optional"
+        ptype = prop_info.get("type", "any")
+        desc = prop_info.get("description", "")
+        param_lines.append(f"  {prop_name} ({req_label}, {ptype}): {desc}")
+
+    example_args = {r: "..." for r in required}
+
+    return (
+        f"{base_desc}\n\n"
+        f"Parameters:\n"
+        + "\n".join(param_lines) + "\n\n"
+        f"Example call: {tool_name}({json.dumps(example_args)})\n"
+        f"You MUST provide all REQUIRED parameters as a JSON object."
+    )
+
+
+def _make_langchain_tool(
+    *,
+    loop: AgentLoop,
+    tool_name: str,
+    tool_class: type[Any],
+    args_model: type[BaseModel],
+    emit_event: Callable[[BaseEvent], Awaitable[None]],
+    on_tool_started: Callable[[], None],
+    on_tool_finished: Callable[[], None],
+) -> Any:
+    """Create a single LangChain tool wrapping a Vibe tool class."""
+    async def _runner(
+        tool_call_id: Annotated[str | None, InjectedToolCallId] = None,
+        **kwargs: Any,
+    ) -> str:
+        # Catch empty-arg calls BEFORE any validation. LangChain may pass
+        # empty kwargs through without schema validation, so we handle it
+        # here to give the model a clear error with the expected schema.
+        if not kwargs:
+            schema = args_model.model_json_schema()
+            required = schema.get("required", [])
+            props = schema.get("properties", {})
+            param_lines = []
+            for pname, pinfo in props.items():
+                req = " (REQUIRED)" if pname in required else ""
+                param_lines.append(
+                    f"  - {pname}{req}: {pinfo.get('type', 'any')}. "
+                    f"{pinfo.get('description', '')}"
+                )
+            example = {r: "..." for r in required}
+            return (
+                f"ERROR: No arguments provided for '{tool_name}'. "
+                f"You must pass a JSON object with the required parameters.\n\n"
+                f"Parameters for '{tool_name}':\n"
+                + "\n".join(param_lines) + "\n\n"
+                f"Example: {tool_name}({json.dumps(example)})"
+            )
+
+        return await _invoke_vibe_tool(
+            loop=loop,
+            tool_name=tool_name,
+            tool_class=tool_class,
+            args_model=args_model,
+            kwargs=kwargs,
+            tool_call_id=tool_call_id or str(uuid4()),
+            emit_event=emit_event,
+            on_tool_started=on_tool_started,
+            on_tool_finished=on_tool_finished,
+        )
+
+    _runner.__name__ = f"run_{tool_name.replace('-', '_')}"
+    enhanced_desc = _build_enhanced_description(tool_name, tool_class, args_model)
+    lc_tool = langchain_tool(
+        tool_name,
+        description=enhanced_desc,
+        args_schema=args_model,
+    )(_runner)
+
+    # Set a custom validation error handler so the model gets a helpful
+    # error with the full parameter schema instead of raw Pydantic errors.
+    def _validation_error_handler(e: Exception) -> str:
+        schema = args_model.model_json_schema()
+        required = schema.get("required", [])
+        props = schema.get("properties", {})
+        param_lines = []
+        for pname, pinfo in props.items():
+            req = " (REQUIRED)" if pname in required else ""
+            param_lines.append(
+                f"  - {pname}{req}: {pinfo.get('type', 'any')}. "
+                f"{pinfo.get('description', '')}"
+            )
+        example = {r: "..." for r in required}
+        return (
+            f"ERROR: Invalid arguments for '{tool_name}'. {e}\n\n"
+            f"You MUST provide a JSON object with these parameters:\n"
+            + "\n".join(param_lines) + "\n\n"
+            f"Example: {json.dumps(example)}"
+        )
+
+    lc_tool.handle_validation_error = _validation_error_handler
+    lc_tool.handle_tool_error = True
+    return lc_tool
+
+
 def build_langchain_tools(
     loop: AgentLoop,
     emit_event: Callable[[BaseEvent], Awaitable[None]],
@@ -490,43 +642,53 @@ def build_langchain_tools(
         raise ModuleNotFoundError(msg)
 
     tools: list[Any] = []
-    for tool_name, tool_class in loop.tool_manager.available_tools.items():
-        args_model, _ = tool_class._get_tool_args_results()
-
-        def _make_runner(
-            *,
-            current_tool_name: str,
-            current_tool_class: type[Any],
-            current_args_model: type[BaseModel],
-        ) -> Any:
-            async def _runner(
-                tool_call_id: Annotated[str | None, InjectedToolCallId] = None,
-                **kwargs: Any,
-            ) -> str:
-                return await _invoke_vibe_tool(
-                    loop=loop,
-                    tool_name=current_tool_name,
-                    tool_class=current_tool_class,
-                    args_model=current_args_model,
-                    kwargs=kwargs,
-                    tool_call_id=tool_call_id or str(uuid4()),
-                    emit_event=emit_event,
-                    on_tool_started=on_tool_started,
-                    on_tool_finished=on_tool_finished,
-                )
-
-            _runner.__name__ = f"run_{current_tool_name.replace('-', '_')}"
-            return langchain_tool(
-                current_tool_name,
-                description=current_tool_class.description,
-                args_schema=current_args_model,
-            )(_runner)
-
+    for name, cls in loop.tool_manager.available_tools.items():
+        model, _ = cls._get_tool_args_results()
         tools.append(
-            _make_runner(
-                current_tool_name=tool_name,
-                current_tool_class=tool_class,
-                current_args_model=args_model,
+            _make_langchain_tool(
+                loop=loop,
+                tool_name=name,
+                tool_class=cls,
+                args_model=model,
+                emit_event=emit_event,
+                on_tool_started=on_tool_started,
+                on_tool_finished=on_tool_finished,
+            )
+        )
+    return tools
+
+
+def build_langchain_tools_filtered(
+    loop: AgentLoop,
+    tool_names: Sequence[str],
+    emit_event: Callable[[BaseEvent], Awaitable[None]],
+    on_tool_started: Callable[[], None],
+    on_tool_finished: Callable[[], None],
+) -> list[Any]:
+    """Build LangChain tools for only the specified tool names.
+
+    Same as ``build_langchain_tools`` but restricted to an explicit whitelist.
+    Tools not present in ``loop.tool_manager.available_tools`` are silently skipped.
+    """
+    if not LANGCHAIN_AVAILABLE:
+        msg = "LangChain is not installed"
+        raise ModuleNotFoundError(msg)
+
+    allowed = set(tool_names)
+    tools: list[Any] = []
+    for name, cls in loop.tool_manager.available_tools.items():
+        if name not in allowed:
+            continue
+        model, _ = cls._get_tool_args_results()
+        tools.append(
+            _make_langchain_tool(
+                loop=loop,
+                tool_name=name,
+                tool_class=cls,
+                args_model=model,
+                emit_event=emit_event,
+                on_tool_started=on_tool_started,
+                on_tool_finished=on_tool_finished,
             )
         )
     return tools

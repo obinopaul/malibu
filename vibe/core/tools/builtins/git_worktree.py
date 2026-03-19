@@ -111,7 +111,7 @@ class GitWorktree(
 
     @classmethod
     def get_status_text(cls) -> str:
-        return "Managing worktrees"
+        return "Managing Git worktrees"
 
     def resolve_permission(self, args: GitWorktreeArgs) -> ToolPermission | None:
         match args.action:

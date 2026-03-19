@@ -49,14 +49,17 @@ class AnthropicMapper:
 
     def _convert_assistant_message(self, msg: LLMMessage) -> dict[str, Any]:
         content: list[dict[str, Any]] = []
-        if msg.reasoning_content:
-            block: dict[str, Any] = {
-                "type": "thinking",
-                "thinking": msg.reasoning_content,
-            }
-            if msg.reasoning_signature:
-                block["signature"] = msg.reasoning_signature
-            content.append(block)
+        # Anthropic requires a signature for replayed thinking blocks.
+        # If history contains incomplete reasoning (thinking without signature),
+        # skip the thinking block instead of sending an invalid payload.
+        if msg.reasoning_content and msg.reasoning_signature:
+            content.append(
+                {
+                    "type": "thinking",
+                    "thinking": msg.reasoning_content,
+                    "signature": msg.reasoning_signature,
+                }
+            )
         if msg.content:
             content.append({"type": "text", "text": msg.content})
         if msg.tool_calls:
@@ -316,7 +319,7 @@ STREAMING_EVENT_TYPES = {
 
 
 class AnthropicAdapter(APIAdapter):
-    endpoint: ClassVar[str] = "/v1/messages"
+    endpoint: ClassVar[str] = "/messages"
     API_VERSION = "2023-06-01"
     BETA_FEATURES = (
         "interleaved-thinking-2025-05-14,"

@@ -63,6 +63,7 @@ from vibe.cli.textual_ui.widgets.proxy_setup_app import ProxySetupApp
 from vibe.cli.textual_ui.widgets.question_app import QuestionApp
 from vibe.cli.textual_ui.widgets.session_picker import SessionPickerApp
 from vibe.cli.textual_ui.widgets.teleport_message import TeleportMessage
+from vibe.cli.textual_ui.widgets.plan_options import PlanOptionsApp
 from vibe.cli.textual_ui.widgets.tools import ToolResultMessage
 from vibe.cli.textual_ui.windowing import (
     HISTORY_RESUME_TAIL_MESSAGES,
@@ -89,6 +90,7 @@ from vibe.cli.update_notifier import (
 from vibe.cli.update_notifier.update import do_update
 from vibe.core.agent_loop import AgentLoop, TeleportError
 from vibe.core.agents import AgentProfile
+from vibe.core.agents.models import BuiltinAgentName
 from vibe.core.autocompletion.path_prompt_adapter import render_path_prompt
 from vibe.core.config import Backend, VibeConfig
 from vibe.core.config.credentials import save_api_key
@@ -116,6 +118,7 @@ from vibe.core.tools.builtins.ask_user_question import (
 from vibe.core.types import (
     AgentStats,
     ApprovalResponse,
+    AssistantEvent,
     LLMMessage,
     RateLimitError,
     Role,
@@ -138,6 +141,7 @@ class BottomApp(StrEnum):
     Approval = auto()
     Config = auto()
     Input = auto()
+    PlanOptions = auto()
     ProxySetup = auto()
     Question = auto()
     SessionPicker = auto()
@@ -237,6 +241,9 @@ class VibeApp(App):  # noqa: PLR0904
         self._agent_task: asyncio.Task | None = None
 
         self._loading_widget: LoadingWidget | None = None
+        self._plan_mode: bool = False
+        self._plan_collected_text: list[str] = []
+        self._pre_plan_agent_name: str | None = None
         self._pending_approval: asyncio.Future | None = None
         self._pending_question: asyncio.Future | None = None
 
@@ -739,6 +746,7 @@ class VibeApp(App):  # noqa: PLR0904
 
     async def _handle_agent_loop_turn(self, prompt: str) -> None:
         self._agent_running = True
+        turn_text_chunks: list[str] = []
 
         loading_area = self._cached_loading_area or self.query_one(
             "#loading-area-content"
@@ -751,6 +759,8 @@ class VibeApp(App):  # noqa: PLR0904
         try:
             rendered_prompt = render_path_prompt(prompt, base_dir=Path.cwd())
             async for event in self.agent_loop.act(rendered_prompt):
+                if self._plan_mode and isinstance(event, AssistantEvent) and event.content:
+                    turn_text_chunks.append(event.content)
                 if self.event_handler:
                     await self.event_handler.handle_event(
                         event,
@@ -788,6 +798,11 @@ class VibeApp(App):  # noqa: PLR0904
                 await self.event_handler.finalize_streaming()
             await self._refresh_windowing_from_history()
             self._terminal_notifier.notify(NotificationContext.COMPLETE)
+
+        if self._plan_mode and turn_text_chunks:
+            self._plan_collected_text.extend(turn_text_chunks)
+            plan_text = "".join(self._plan_collected_text)
+            await self._switch_to_plan_options_app(plan_text)
 
     def _rate_limit_message(self) -> str:
         upgrade_to_pro = self._plan_info and self._plan_info.plan_type in {
@@ -1196,6 +1211,163 @@ class VibeApp(App):  # noqa: PLR0904
             if self.event_handler:
                 self.event_handler.current_compact = None
 
+    async def _plan_command(self) -> None:
+        """Switch to plan mode — loads the PLAN agent profile."""
+        if self._plan_mode:
+            await self._mount_and_scroll(
+                WarningMessage("Already in plan mode. Type your task to start planning.")
+            )
+            return
+
+        if self._agent_running:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Cannot switch to plan mode while agent is running. Please wait.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+
+        self._pre_plan_agent_name = self.agent_loop.agent_profile.name
+        self._plan_mode = True
+        self._plan_collected_text = []
+
+        self._switch_agent_generation += 1
+        my_gen = self._switch_agent_generation
+
+        if self._chat_input_container:
+            self._chat_input_container.switching_mode = True
+
+        def do_switch() -> None:
+            try:
+                asyncio.run(self.agent_loop.switch_agent(BuiltinAgentName.PLAN))
+                self.agent_loop.set_approval_callback(self._approval_callback)
+                self.agent_loop.set_user_input_callback(self._user_input_callback)
+            finally:
+                if (
+                    self._chat_input_container
+                    and self._switch_agent_generation == my_gen
+                ):
+                    self.call_from_thread(
+                        setattr, self._chat_input_container, "switching_mode", False
+                    )
+                self.call_from_thread(self._refresh_profile_widgets)
+
+        self.run_worker(do_switch, group="switch_agent", exclusive=True, thread=True)
+
+        await self._mount_and_scroll(
+            UserCommandMessage(
+                "Plan mode activated. Describe what you want to plan."
+            )
+        )
+
+    async def _switch_to_plan_options_app(self, plan_text: str) -> None:
+        plan_options = PlanOptionsApp(plan_text=plan_text)
+        await self._switch_from_input(plan_options, scroll=True)
+
+    async def _exit_plan_mode(self) -> None:
+        """Leave plan mode: switch back to previous agent profile and restore input."""
+        self._plan_mode = False
+        self._plan_collected_text = []
+        await self._switch_to_input_app()
+
+        target = self._pre_plan_agent_name or BuiltinAgentName.DEFAULT
+        self._pre_plan_agent_name = None
+
+        self._switch_agent_generation += 1
+        my_gen = self._switch_agent_generation
+
+        if self._chat_input_container:
+            self._chat_input_container.switching_mode = True
+
+        def do_switch() -> None:
+            try:
+                asyncio.run(self.agent_loop.switch_agent(target))
+                self.agent_loop.set_approval_callback(self._approval_callback)
+                self.agent_loop.set_user_input_callback(self._user_input_callback)
+            finally:
+                if (
+                    self._chat_input_container
+                    and self._switch_agent_generation == my_gen
+                ):
+                    self.call_from_thread(
+                        setattr, self._chat_input_container, "switching_mode", False
+                    )
+                self.call_from_thread(self._refresh_profile_widgets)
+
+        self.run_worker(do_switch, group="switch_agent", exclusive=True, thread=True)
+
+    # ------------------------------------------------------------------
+    # Plan options message handlers
+    # ------------------------------------------------------------------
+
+    async def on_plan_options_app_implement_clear_auto_accept(
+        self, message: PlanOptionsApp.ImplementClearAutoAccept
+    ) -> None:
+        """Exit plan mode, clear context, implement plan with auto-accept edits."""
+        await self._exit_plan_mode()
+        await self._clear_history_silent()
+        self._set_auto_approve_mode(enabled=True)
+        prompt = f"Implement this plan:\n\n{message.plan_text}"
+        await self._handle_user_message(prompt)
+
+    async def on_plan_options_app_implement_manual_approve(
+        self, message: PlanOptionsApp.ImplementManualApprove
+    ) -> None:
+        """Exit plan mode, implement plan with manual approval for edits."""
+        await self._exit_plan_mode()
+        prompt = f"Implement this plan:\n\n{message.plan_text}"
+        await self._handle_user_message(prompt)
+
+    async def on_plan_options_app_implement_auto_accept(
+        self, message: PlanOptionsApp.ImplementAutoAccept
+    ) -> None:
+        """Exit plan mode, implement plan with auto-accept edits (keep context)."""
+        await self._exit_plan_mode()
+        self._set_auto_approve_mode(enabled=True)
+        prompt = f"Implement this plan:\n\n{message.plan_text}"
+        await self._handle_user_message(prompt)
+
+    async def on_plan_options_app_revise_with_feedback(
+        self, message: PlanOptionsApp.ReviseWithFeedback
+    ) -> None:
+        """User wants to revise — stay in plan mode, send feedback to plan agent."""
+        await self._switch_to_input_app()
+        await self._handle_user_message(message.feedback)
+
+    async def on_plan_options_app_cancelled(
+        self, _message: PlanOptionsApp.Cancelled
+    ) -> None:
+        """User dismissed the plan options panel — stay in plan mode for more chat."""
+        await self._switch_to_input_app()
+
+    async def _clear_history_silent(self) -> None:
+        """Clear conversation history without UI feedback (used by plan flow)."""
+        try:
+            if self.event_handler:
+                await self.event_handler.finalize_streaming(flush_reasoning=False)
+            self._reset_ui_state()
+            await self.agent_loop.clear_history()
+            messages_area = self._cached_messages_area or self.query_one("#messages")
+            await messages_area.remove_children()
+            await self._clear_live_reasoning()
+        except Exception as e:
+            logger.warning("Failed to clear history for plan: %s", e)
+
+    def _set_auto_approve_mode(self, *, enabled: bool) -> None:
+        """Switch to accept-edits agent profile (mirrors Shift+Tab behaviour)."""
+        target = BuiltinAgentName.ACCEPT_EDITS if enabled else BuiltinAgentName.DEFAULT
+        if self.agent_loop.agent_profile.name == target:
+            return
+
+        async def _do_switch() -> None:
+            await self.agent_loop.switch_agent(target)
+            self.agent_loop.set_approval_callback(self._approval_callback)
+            self.agent_loop.set_user_input_callback(self._user_input_callback)
+            self._refresh_profile_widgets()
+
+        self.run_worker(_do_switch(), group="mode_switch", exclusive=True)
+
     def _get_session_resume_info(self) -> str | None:
         if not self.agent_loop.session_logger.enabled:
             return None
@@ -1305,6 +1477,8 @@ class VibeApp(App):  # noqa: PLR0904
                     self.query_one(QuestionApp).focus()
                 case BottomApp.SessionPicker:
                     self.query_one(SessionPickerApp).focus()
+                case BottomApp.PlanOptions:
+                    self.query_one(PlanOptionsApp).focus()
                 case app:
                     assert_never(app)
         except Exception:
@@ -1340,6 +1514,14 @@ class VibeApp(App):  # noqa: PLR0904
         try:
             session_picker = self.query_one(SessionPickerApp)
             session_picker.post_message(SessionPickerApp.Cancelled())
+        except Exception:
+            pass
+        self._last_escape_time = None
+
+    def _handle_plan_options_app_escape(self) -> None:
+        try:
+            plan_options = self.query_one(PlanOptionsApp)
+            plan_options.action_cancel()
         except Exception:
             pass
         self._last_escape_time = None
@@ -1382,6 +1564,10 @@ class VibeApp(App):  # noqa: PLR0904
 
         if self._current_bottom_app == BottomApp.SessionPicker:
             self._handle_session_picker_app_escape()
+            return
+
+        if self._current_bottom_app == BottomApp.PlanOptions:
+            self._handle_plan_options_app_escape()
             return
 
         if (
