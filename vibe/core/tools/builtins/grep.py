@@ -127,6 +127,18 @@ class Grep(
             stdout, args.max_matches or self.config.default_max_matches
         )
 
+    @staticmethod
+    def _needs_fixed_string(pattern: str) -> bool:
+        """Return True if the pattern looks like a literal string with
+        unbalanced regex metacharacters.  In that case we use fixed-string
+        mode (-F) instead of regex so the search doesn't fail."""
+        import re
+        try:
+            re.compile(pattern)
+        except re.error:
+            return True
+        return False
+
     def _validate_args(self, args: GrepArgs) -> None:
         if not args.pattern.strip():
             raise ToolError("Empty search pattern provided.")
@@ -183,6 +195,9 @@ class Grep(
             str(max_matches + 1),
         ]
 
+        if self._needs_fixed_string(args.pattern):
+            cmd.append("--fixed-strings")
+
         if not args.use_default_ignore:
             cmd.append("--no-ignore")
 
@@ -198,7 +213,10 @@ class Grep(
     ) -> list[str]:
         max_matches = args.max_matches or self.config.default_max_matches
 
-        cmd = ["grep", "-r", "-n", "-I", "-E", f"--max-count={max_matches + 1}"]
+        if self._needs_fixed_string(args.pattern):
+            cmd = ["grep", "-r", "-n", "-I", "-F", f"--max-count={max_matches + 1}"]
+        else:
+            cmd = ["grep", "-r", "-n", "-I", "-E", f"--max-count={max_matches + 1}"]
 
         if args.pattern.islower():
             cmd.append("-i")

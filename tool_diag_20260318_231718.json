@@ -1,0 +1,398 @@
+{
+  "meta": {
+    "timestamp": "2026-03-19T04:17:26.324935+00:00",
+    "model": "gpt-5.4",
+    "tool_schemas": {
+      "grep": {
+        "description": "Recursively search files for a regex pattern using ripgrep (rg) or grep. Respects .gitignore and .codeignore files by default when using ripgrep.",
+        "args_schema": {
+          "properties": {
+            "pattern": {
+              "title": "Pattern",
+              "type": "string"
+            },
+            "path": {
+              "default": ".",
+              "title": "Path",
+              "type": "string"
+            },
+            "max_matches": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Override the default maximum number of matches.",
+              "title": "Max Matches"
+            },
+            "use_default_ignore": {
+              "default": true,
+              "description": "Whether to respect .gitignore and .ignore files.",
+              "title": "Use Default Ignore",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "title": "GrepArgs",
+          "type": "object"
+        }
+      },
+      "read_file": {
+        "description": "Read local files with line-based paging. Text files are returned directly, PDFs are extracted to text, and supported images return metadata summaries.",
+        "args_schema": {
+          "properties": {
+            "path": {
+              "title": "Path",
+              "type": "string"
+            },
+            "offset": {
+              "default": 0,
+              "description": "Line number to start reading from (0-indexed, inclusive).",
+              "title": "Offset",
+              "type": "integer"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum number of lines to read.",
+              "title": "Limit"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "title": "ReadFileArgs",
+          "type": "object"
+        }
+      },
+      "task": {
+        "description": "Delegate a task to a subagent for independent execution. Useful for exploration, research, or parallel work that doesn't require user interaction. The subagent runs in-memory and saves interaction logs.",
+        "args_schema": {
+          "properties": {
+            "task": {
+              "description": "The task to delegate to the subagent",
+              "title": "Task",
+              "type": "string"
+            },
+            "agent": {
+              "default": "my-subagent",
+              "description": "Name of the agent profile to use (must be a subagent)",
+              "title": "Agent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task"
+          ],
+          "title": "TaskArgs",
+          "type": "object"
+        }
+      },
+      "todo": {
+        "description": "Manage todos. Use action='read' to view, action='write' with complete list to update.",
+        "args_schema": {
+          "$defs": {
+            "TodoItem": {
+              "properties": {
+                "id": {
+                  "title": "Id",
+                  "type": "string"
+                },
+                "content": {
+                  "title": "Content",
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/$defs/TodoStatus",
+                  "default": "pending"
+                },
+                "priority": {
+                  "$ref": "#/$defs/TodoPriority",
+                  "default": "medium"
+                }
+              },
+              "required": [
+                "id",
+                "content"
+              ],
+              "title": "TodoItem",
+              "type": "object"
+            },
+            "TodoPriority": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "TodoPriority",
+              "type": "string"
+            },
+            "TodoStatus": {
+              "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "cancelled"
+              ],
+              "title": "TodoStatus",
+              "type": "string"
+            }
+          },
+          "properties": {
+            "action": {
+              "description": "Either 'read' or 'write'",
+              "title": "Action",
+              "type": "string"
+            },
+            "todos": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/TodoItem"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Complete list of todos when writing.",
+              "title": "Todos"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "title": "TodoArgs",
+          "type": "object"
+        }
+      }
+    },
+    "tool_defs_sent_to_llm": [
+      {
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "description": "Recursively search files for a regex pattern using ripgrep (rg) or grep. Respects .gitignore and .codeignore files by default when using ripgrep.\n\nParameters:\n  pattern (REQUIRED, string): \n  path (optional, string): \n  max_matches (optional, any): Override the default maximum number of matches.\n  use_default_ignore (optional, boolean): Whether to respect .gitignore and .ignore files.\n\nExample call: grep({\"pattern\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "properties": {
+              "pattern": {
+                "title": "Pattern",
+                "type": "string"
+              },
+              "path": {
+                "default": ".",
+                "title": "Path",
+                "type": "string"
+              },
+              "max_matches": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Override the default maximum number of matches.",
+                "title": "Max Matches"
+              },
+              "use_default_ignore": {
+                "default": true,
+                "description": "Whether to respect .gitignore and .ignore files.",
+                "title": "Use Default Ignore",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Read local files with line-based paging. Text files are returned directly, PDFs are extracted to text, and supported images return metadata summaries.\n\nParameters:\n  path (REQUIRED, string): \n  offset (optional, integer): Line number to start reading from (0-indexed, inclusive).\n  limit (optional, any): Maximum number of lines to read.\n\nExample call: read_file({\"path\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "title": "Path",
+                "type": "string"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Line number to start reading from (0-indexed, inclusive).",
+                "title": "Offset",
+                "type": "integer"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Maximum number of lines to read.",
+                "title": "Limit"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "task",
+          "description": "Delegate a task to a subagent for independent execution. Useful for exploration, research, or parallel work that doesn't require user interaction. The subagent runs in-memory and saves interaction logs.\n\nParameters:\n  task (REQUIRED, string): The task to delegate to the subagent\n  agent (optional, string): Name of the agent profile to use (must be a subagent)\n\nExample call: task({\"task\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "properties": {
+              "task": {
+                "description": "The task to delegate to the subagent",
+                "title": "Task",
+                "type": "string"
+              },
+              "agent": {
+                "default": "my-subagent",
+                "description": "Name of the agent profile to use (must be a subagent)",
+                "title": "Agent",
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "description": "Manage todos. Use action='read' to view, action='write' with complete list to update.\n\nParameters:\n  action (REQUIRED, string): Either 'read' or 'write'\n  todos (optional, any): Complete list of todos when writing.\n\nExample call: todo({\"action\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "$defs": {
+              "TodoItem": {
+                "properties": {
+                  "id": {
+                    "title": "Id",
+                    "type": "string"
+                  },
+                  "content": {
+                    "title": "Content",
+                    "type": "string"
+                  },
+                  "status": {
+                    "$ref": "#/$defs/TodoStatus",
+                    "default": "pending"
+                  },
+                  "priority": {
+                    "$ref": "#/$defs/TodoPriority",
+                    "default": "medium"
+                  }
+                },
+                "required": [
+                  "id",
+                  "content"
+                ],
+                "title": "TodoItem",
+                "type": "object"
+              },
+              "TodoPriority": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "title": "TodoPriority",
+                "type": "string"
+              },
+              "TodoStatus": {
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed",
+                  "cancelled"
+                ],
+                "title": "TodoStatus",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "action": {
+                "description": "Either 'read' or 'write'",
+                "title": "Action",
+                "type": "string"
+              },
+              "todos": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/TodoItem"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Complete list of todos when writing.",
+                "title": "Todos"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          }
+        }
+      }
+    ]
+  },
+  "tests": {
+    "langchain_single_call": {
+      "test": "langchain_single_call",
+      "passed": true,
+      "tool_calls": [
+        {
+          "name": "read_file",
+          "args": {
+            "path": "pyproject.toml",
+            "offset": 0,
+            "limit": 200
+          }
+        }
+      ],
+      "text": "",
+      "elapsed": 5.297,
+      "chunks_total": 125,
+      "chunks_with_tool_call_chunks": 17
+    }
+  }
+}

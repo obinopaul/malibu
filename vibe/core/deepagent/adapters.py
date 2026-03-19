@@ -232,10 +232,16 @@ def _vibe_to_langchain_ai_chunk(message: LLMMessage, usage: LLMUsage | None = No
 
     tool_call_chunks = []
     for tool_call in message.tool_calls or []:
+        # Pass through name and id exactly as received.  The backend
+        # adapter sets name/id only on the first chunk for each tool call
+        # and sends empty strings on subsequent deltas.  LangChain's
+        # AIMessageChunk.__add__ concatenates these fields, so non-empty
+        # values on every chunk produce mangled names like
+        # "read_fileread_fileread_file...".
         tool_call_chunks.append(
             {
-                "id": tool_call.id,
-                "name": tool_call.function.name,
+                "id": tool_call.id or "",
+                "name": tool_call.function.name or "",
                 "args": tool_call.function.arguments or "",
                 "index": tool_call.index,
                 "type": "tool_call_chunk",

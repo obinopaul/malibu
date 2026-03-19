@@ -1,0 +1,804 @@
+{
+  "meta": {
+    "timestamp": "2026-03-19T04:12:43.002781+00:00",
+    "model": "gpt-5.4",
+    "tool_schemas": {
+      "grep": {
+        "description": "Recursively search files for a regex pattern using ripgrep (rg) or grep. Respects .gitignore and .codeignore files by default when using ripgrep.",
+        "args_schema": {
+          "properties": {
+            "pattern": {
+              "title": "Pattern",
+              "type": "string"
+            },
+            "path": {
+              "default": ".",
+              "title": "Path",
+              "type": "string"
+            },
+            "max_matches": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Override the default maximum number of matches.",
+              "title": "Max Matches"
+            },
+            "use_default_ignore": {
+              "default": true,
+              "description": "Whether to respect .gitignore and .ignore files.",
+              "title": "Use Default Ignore",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "title": "GrepArgs",
+          "type": "object"
+        }
+      },
+      "read_file": {
+        "description": "Read local files with line-based paging. Text files are returned directly, PDFs are extracted to text, and supported images return metadata summaries.",
+        "args_schema": {
+          "properties": {
+            "path": {
+              "title": "Path",
+              "type": "string"
+            },
+            "offset": {
+              "default": 0,
+              "description": "Line number to start reading from (0-indexed, inclusive).",
+              "title": "Offset",
+              "type": "integer"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Maximum number of lines to read.",
+              "title": "Limit"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "title": "ReadFileArgs",
+          "type": "object"
+        }
+      },
+      "task": {
+        "description": "Delegate a task to a subagent for independent execution. Useful for exploration, research, or parallel work that doesn't require user interaction. The subagent runs in-memory and saves interaction logs.",
+        "args_schema": {
+          "properties": {
+            "task": {
+              "description": "The task to delegate to the subagent",
+              "title": "Task",
+              "type": "string"
+            },
+            "agent": {
+              "default": "my-subagent",
+              "description": "Name of the agent profile to use (must be a subagent)",
+              "title": "Agent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task"
+          ],
+          "title": "TaskArgs",
+          "type": "object"
+        }
+      },
+      "todo": {
+        "description": "Manage todos. Use action='read' to view, action='write' with complete list to update.",
+        "args_schema": {
+          "$defs": {
+            "TodoItem": {
+              "properties": {
+                "id": {
+                  "title": "Id",
+                  "type": "string"
+                },
+                "content": {
+                  "title": "Content",
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/$defs/TodoStatus",
+                  "default": "pending"
+                },
+                "priority": {
+                  "$ref": "#/$defs/TodoPriority",
+                  "default": "medium"
+                }
+              },
+              "required": [
+                "id",
+                "content"
+              ],
+              "title": "TodoItem",
+              "type": "object"
+            },
+            "TodoPriority": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "title": "TodoPriority",
+              "type": "string"
+            },
+            "TodoStatus": {
+              "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "cancelled"
+              ],
+              "title": "TodoStatus",
+              "type": "string"
+            }
+          },
+          "properties": {
+            "action": {
+              "description": "Either 'read' or 'write'",
+              "title": "Action",
+              "type": "string"
+            },
+            "todos": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/TodoItem"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Complete list of todos when writing.",
+              "title": "Todos"
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "title": "TodoArgs",
+          "type": "object"
+        }
+      }
+    },
+    "tool_defs_sent_to_llm": [
+      {
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "description": "Recursively search files for a regex pattern using ripgrep (rg) or grep. Respects .gitignore and .codeignore files by default when using ripgrep.\n\nParameters:\n  pattern (REQUIRED, string): \n  path (optional, string): \n  max_matches (optional, any): Override the default maximum number of matches.\n  use_default_ignore (optional, boolean): Whether to respect .gitignore and .ignore files.\n\nExample call: grep({\"pattern\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "properties": {
+              "pattern": {
+                "title": "Pattern",
+                "type": "string"
+              },
+              "path": {
+                "default": ".",
+                "title": "Path",
+                "type": "string"
+              },
+              "max_matches": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Override the default maximum number of matches.",
+                "title": "Max Matches"
+              },
+              "use_default_ignore": {
+                "default": true,
+                "description": "Whether to respect .gitignore and .ignore files.",
+                "title": "Use Default Ignore",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_file",
+          "description": "Read local files with line-based paging. Text files are returned directly, PDFs are extracted to text, and supported images return metadata summaries.\n\nParameters:\n  path (REQUIRED, string): \n  offset (optional, integer): Line number to start reading from (0-indexed, inclusive).\n  limit (optional, any): Maximum number of lines to read.\n\nExample call: read_file({\"path\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "properties": {
+              "path": {
+                "title": "Path",
+                "type": "string"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Line number to start reading from (0-indexed, inclusive).",
+                "title": "Offset",
+                "type": "integer"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Maximum number of lines to read.",
+                "title": "Limit"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "task",
+          "description": "Delegate a task to a subagent for independent execution. Useful for exploration, research, or parallel work that doesn't require user interaction. The subagent runs in-memory and saves interaction logs.\n\nParameters:\n  task (REQUIRED, string): The task to delegate to the subagent\n  agent (optional, string): Name of the agent profile to use (must be a subagent)\n\nExample call: task({\"task\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "properties": {
+              "task": {
+                "description": "The task to delegate to the subagent",
+                "title": "Task",
+                "type": "string"
+              },
+              "agent": {
+                "default": "my-subagent",
+                "description": "Name of the agent profile to use (must be a subagent)",
+                "title": "Agent",
+                "type": "string"
+              }
+            },
+            "required": [
+              "task"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "description": "Manage todos. Use action='read' to view, action='write' with complete list to update.\n\nParameters:\n  action (REQUIRED, string): Either 'read' or 'write'\n  todos (optional, any): Complete list of todos when writing.\n\nExample call: todo({\"action\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+          "parameters": {
+            "$defs": {
+              "TodoItem": {
+                "properties": {
+                  "id": {
+                    "title": "Id",
+                    "type": "string"
+                  },
+                  "content": {
+                    "title": "Content",
+                    "type": "string"
+                  },
+                  "status": {
+                    "$ref": "#/$defs/TodoStatus",
+                    "default": "pending"
+                  },
+                  "priority": {
+                    "$ref": "#/$defs/TodoPriority",
+                    "default": "medium"
+                  }
+                },
+                "required": [
+                  "id",
+                  "content"
+                ],
+                "title": "TodoItem",
+                "type": "object"
+              },
+              "TodoPriority": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "title": "TodoPriority",
+                "type": "string"
+              },
+              "TodoStatus": {
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed",
+                  "cancelled"
+                ],
+                "title": "TodoStatus",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "action": {
+                "description": "Either 'read' or 'write'",
+                "title": "Action",
+                "type": "string"
+              },
+              "todos": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/TodoItem"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Complete list of todos when writing.",
+                "title": "Todos"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          }
+        }
+      }
+    ]
+  },
+  "tests": {
+    "non_streaming_comparison": {
+      "test": "non_streaming_comparison",
+      "passed": true,
+      "streaming_tool_calls": [
+        {
+          "id": "call_b3FkkKO9ZfOjn14lp7cZZ5Kw",
+          "name": "read_file",
+          "arguments": {
+            "path": "pyproject.toml",
+            "offset": 0,
+            "limit": 400
+          },
+          "arguments_raw": "{\"path\":\"pyproject.toml\",\"offset\":0,\"limit\":400}"
+        }
+      ],
+      "non_streaming_tool_calls": [],
+      "streaming_result": {
+        "request": {
+          "messages_count": 2,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a planning assistant. You have tools. Read the file pyproject.toml using the read_file tool."
+            },
+            {
+              "role": "user",
+              "content": "Read pyproject.toml"
+            }
+          ],
+          "tools_count": 4,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "grep",
+                "description": "Recursively search files for a regex pattern using ripgrep (rg) or grep. Respects .gitignore and .codeignore files by default when using ripgrep.\n\nParameters:\n  pattern (REQUIRED, string): \n  path (optional, string): \n  max_matches (optional, any): Override the default maximum number of matches.\n  use_default_ignore (optional, boolean): Whether to respect .gitignore and .ignore files.\n\nExample call: grep({\"pattern\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+                "parameters": {
+                  "properties": {
+                    "pattern": {
+                      "title": "Pattern",
+                      "type": "string"
+                    },
+                    "path": {
+                      "default": ".",
+                      "title": "Path",
+                      "type": "string"
+                    },
+                    "max_matches": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Override the default maximum number of matches.",
+                      "title": "Max Matches"
+                    },
+                    "use_default_ignore": {
+                      "default": true,
+                      "description": "Whether to respect .gitignore and .ignore files.",
+                      "title": "Use Default Ignore",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "pattern"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "description": "Read local files with line-based paging. Text files are returned directly, PDFs are extracted to text, and supported images return metadata summaries.\n\nParameters:\n  path (REQUIRED, string): \n  offset (optional, integer): Line number to start reading from (0-indexed, inclusive).\n  limit (optional, any): Maximum number of lines to read.\n\nExample call: read_file({\"path\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+                "parameters": {
+                  "properties": {
+                    "path": {
+                      "title": "Path",
+                      "type": "string"
+                    },
+                    "offset": {
+                      "default": 0,
+                      "description": "Line number to start reading from (0-indexed, inclusive).",
+                      "title": "Offset",
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Maximum number of lines to read.",
+                      "title": "Limit"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "task",
+                "description": "Delegate a task to a subagent for independent execution. Useful for exploration, research, or parallel work that doesn't require user interaction. The subagent runs in-memory and saves interaction logs.\n\nParameters:\n  task (REQUIRED, string): The task to delegate to the subagent\n  agent (optional, string): Name of the agent profile to use (must be a subagent)\n\nExample call: task({\"task\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+                "parameters": {
+                  "properties": {
+                    "task": {
+                      "description": "The task to delegate to the subagent",
+                      "title": "Task",
+                      "type": "string"
+                    },
+                    "agent": {
+                      "default": "my-subagent",
+                      "description": "Name of the agent profile to use (must be a subagent)",
+                      "title": "Agent",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "task"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            {
+              "type": "function",
+              "function": {
+                "name": "todo",
+                "description": "Manage todos. Use action='read' to view, action='write' with complete list to update.\n\nParameters:\n  action (REQUIRED, string): Either 'read' or 'write'\n  todos (optional, any): Complete list of todos when writing.\n\nExample call: todo({\"action\": \"...\"})\nYou MUST provide all REQUIRED parameters as a JSON object.",
+                "parameters": {
+                  "$defs": {
+                    "TodoItem": {
+                      "properties": {
+                        "id": {
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "content": {
+                          "title": "Content",
+                          "type": "string"
+                        },
+                        "status": {
+                          "$ref": "#/$defs/TodoStatus",
+                          "default": "pending"
+                        },
+                        "priority": {
+                          "$ref": "#/$defs/TodoPriority",
+                          "default": "medium"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content"
+                      ],
+                      "title": "TodoItem",
+                      "type": "object"
+                    },
+                    "TodoPriority": {
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ],
+                      "title": "TodoPriority",
+                      "type": "string"
+                    },
+                    "TodoStatus": {
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed",
+                        "cancelled"
+                      ],
+                      "title": "TodoStatus",
+                      "type": "string"
+                    }
+                  },
+                  "properties": {
+                    "action": {
+                      "description": "Either 'read' or 'write'",
+                      "title": "Action",
+                      "type": "string"
+                    },
+                    "todos": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "$ref": "#/$defs/TodoItem"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Complete list of todos when writing.",
+                      "title": "Todos"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ],
+                  "type": "object"
+                }
+              }
+            }
+          ]
+        },
+        "response": {
+          "text": "",
+          "reasoning": "**Preparing to read file**\n\nI need to follow the user's request to read the pyproject.toml file. It sounds like my next step is to use the read_file tool to access its contents. I'll probably summarize the file once I have the data, or at least mention if it isn't there. Alright, time to use the commentary channel to call the tool and read the file at the specified path. Let’s get started!",
+          "tool_calls": [
+            {
+              "id": "call_b3FkkKO9ZfOjn14lp7cZZ5Kw",
+              "name": "read_file",
+              "arguments": {
+                "path": "pyproject.toml",
+                "offset": 0,
+                "limit": 400
+              },
+              "arguments_raw": "{\"path\":\"pyproject.toml\",\"offset\":0,\"limit\":400}"
+            }
+          ],
+          "has_tool_calls": true
+        },
+        "streaming_debug": {
+          "total_chunks": 99,
+          "chunks_with_tool_calls": 17,
+          "chunk_log": [
+            {
+              "text": "",
+              "reasoning": "**Preparing to read file**\n\nI",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " need",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " to",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " follow",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " the",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " user's",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " request",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " to",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " read",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " the",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " py",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": "project",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": ".tom",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": "l",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " file",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": ".",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " It",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " sounds",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " like",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            },
+            {
+              "text": "",
+              "reasoning": " my",
+              "tool_calls": [],
+              "prompt_tokens": 0,
+              "completion_tokens": 0
+            }
+          ]
+        },
+        "timing": {
+          "elapsed_seconds": 3.468
+        },
+        "usage": {
+          "prompt_tokens": 726,
+          "completion_tokens": 100
+        }
+      },
+      "non_streaming_result": {
+        "request": {
+          "messages_count": 2,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a planning assistant. You have tools. Read the file pyproject.toml using the read_file tool."
+            },
+            {
+              "role": "user",
+              "content": "Read pyproject.toml"
+            }
+          ],
+          "tools_count": 4
+        },
+        "response": {
+          "text": "",
+          "reasoning": "",
+          "tool_calls": [],
+          "has_tool_calls": false
+        },
+        "timing": {
+          "elapsed_seconds": 5.61
+        },
+        "usage": {
+          "prompt_tokens": 726,
+          "completion_tokens": 92
+        }
+      }
+    }
+  }
+}

@@ -330,14 +330,20 @@ class OpenAIResponsesAdapter(APIAdapter):
         output_index: int,
         item: dict[str, Any] | None = None,
         arguments: str | None = None,
+        include_name: bool = True,
     ) -> LLMChunk:
         resolved_item = item or {}
         state = self._remember_function_call(output_index, resolved_item)
+        # Only include the tool name and id on the FIRST chunk for each tool
+        # call.  LangChain's AIMessageChunk.__add__ concatenates string fields
+        # across chunks, so sending the name on every delta produces mangled
+        # names like "read_fileread_fileread_file..." which breaks ToolNode
+        # lookup.  The id field suffers the same concatenation problem.
         tool_call = ToolCall(
-            id=str(state.get("id") or ""),
+            id=str(state.get("id") or "") if include_name else "",
             index=output_index,
             function=FunctionCall(
-                name=state.get("name"),
+                name=state.get("name") if include_name else "",
                 arguments=arguments if arguments is not None else "",
             ),
         )
@@ -452,7 +458,9 @@ class OpenAIResponsesAdapter(APIAdapter):
                 output_index = int(data.get("output_index", 0))
                 self._seen_tool_call_event = True
                 self._remember_function_call(output_index, item)
-                return self._tool_call_chunk(output_index=output_index, item=item)
+                return self._tool_call_chunk(
+                    output_index=output_index, item=item, include_name=True,
+                )
             case "response.function_call_arguments.delta":
                 output_index = int(data.get("output_index", 0))
                 self._seen_tool_call_event = True
@@ -467,6 +475,7 @@ class OpenAIResponsesAdapter(APIAdapter):
                 return self._tool_call_chunk(
                     output_index=output_index,
                     arguments=str(data.get("delta", "")),
+                    include_name=False,
                 )
             case "response.output_item.done":
                 item = data.get("item") or {}
@@ -477,10 +486,13 @@ class OpenAIResponsesAdapter(APIAdapter):
                         state = self._remember_function_call(output_index, item)
                         if state.get("seen_argument_delta"):
                             return self._empty_chunk(usage)
+                        # No argument deltas were streamed, so this is the
+                        # only chunk — include name and full arguments.
                         return self._tool_call_chunk(
                             output_index=output_index,
                             item=item,
                             arguments=str(item.get("arguments", "")),
+                            include_name=True,
                         )
                     case "reasoning":
                         if self._streaming_request_enabled and self._seen_reasoning_delta:

@@ -136,25 +136,10 @@ def get_tool_schemas(agent_loop) -> dict[str, Any]:
 # Low-level LLM call wrapper — bypasses LangChain entirely
 # ---------------------------------------------------------------------------
 
-async def raw_llm_call(
-    agent_loop,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Make a raw LLM call through the Vibe backend, capturing everything.
+def _msgs_to_vibe(messages: list[dict[str, Any]]):
+    """Convert dict messages to Vibe LLMMessage format."""
+    from vibe.core.types import LLMMessage, Role, ToolCall as VToolCall, FunctionCall
 
-    This bypasses LangChain/LangGraph completely to isolate whether the
-    issue is in the LLM's response or in the agent framework.
-
-    Returns a dict with:
-      - request: the exact messages + tools sent
-      - response: the model's raw response
-      - tool_calls: extracted tool calls (name, args)
-      - text: any text content the model produced
-    """
-    from vibe.core.types import LLMMessage, Role, AvailableTool, AvailableFunction
-
-    # Convert messages to Vibe format
     vibe_messages = []
     for msg in messages:
         role = Role(msg["role"])
@@ -167,13 +152,12 @@ async def raw_llm_call(
                 name=msg.get("name"),
             )
         if msg.get("tool_calls"):
-            from vibe.core.types import ToolCall, ToolFunction
             tc_list = []
             for tc in msg["tool_calls"]:
-                tc_list.append(ToolCall(
+                tc_list.append(VToolCall(
                     id=tc["id"],
                     type="function",
-                    function=ToolFunction(
+                    function=FunctionCall(
                         name=tc["function"]["name"],
                         arguments=json.dumps(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], dict) else tc["function"]["arguments"],
                     ),
@@ -184,41 +168,30 @@ async def raw_llm_call(
                 tool_calls=tc_list,
             )
         vibe_messages.append(lmsg)
+    return vibe_messages
 
-    # Convert tools to Vibe format
-    vibe_tools = None
-    if tools:
-        vibe_tools = []
-        for t in tools:
-            func = t.get("function", t)
-            vibe_tools.append(AvailableTool(
-                function=AvailableFunction(
-                    name=func["name"],
-                    description=func.get("description", ""),
-                    parameters=func.get("parameters", {}),
-                )
-            ))
 
-    # Get model/provider
-    active_model = agent_loop.config.get_active_model()
-    provider = agent_loop.config.get_provider_for_model(active_model)
+def _tools_to_vibe(tools: list[dict[str, Any]] | None):
+    """Convert dict tools to Vibe AvailableTool format."""
+    from vibe.core.types import AvailableTool, AvailableFunction
 
-    # Make the call
-    start = time.monotonic()
-    result = await agent_loop.backend.complete(
-        model=active_model,
-        messages=vibe_messages,
-        temperature=active_model.temperature,
-        tools=vibe_tools,
-        tool_choice=None,
-        extra_headers=agent_loop._get_extra_headers(provider),
-        max_tokens=None,
-        metadata=None,
-    )
-    elapsed = time.monotonic() - start
+    if not tools:
+        return None
+    vibe_tools = []
+    for t in tools:
+        func = t.get("function", t)
+        vibe_tools.append(AvailableTool(
+            function=AvailableFunction(
+                name=func["name"],
+                description=func.get("description", ""),
+                parameters=func.get("parameters", {}),
+            )
+        ))
+    return vibe_tools
 
-    # Extract response
-    response_msg = result.message
+
+def _extract_tool_calls_from_msg(response_msg) -> list[dict[str, Any]]:
+    """Extract tool calls from an LLMMessage into a serializable list."""
     tool_calls_out = []
     if response_msg.tool_calls:
         for tc in response_msg.tool_calls:
@@ -233,6 +206,80 @@ async def raw_llm_call(
                 "arguments": args_parsed,
                 "arguments_raw": args_raw,
             })
+    return tool_calls_out
+
+
+async def raw_llm_call(
+    agent_loop,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Make a raw LLM call using STREAMING (the actual code path used by the agent).
+
+    Uses complete_streaming() and aggregates chunks, exactly like the real
+    DeepAgentRuntime does. This ensures we test the same parsing path.
+
+    Also captures per-chunk data to see if tool calls appear in intermediate
+    chunks but get lost in aggregation.
+    """
+    from vibe.core.types import LLMChunk
+
+    vibe_messages = _msgs_to_vibe(messages)
+    vibe_tools = _tools_to_vibe(tools)
+
+    active_model = agent_loop.config.get_active_model()
+    provider = agent_loop.config.get_provider_for_model(active_model)
+
+    start = time.monotonic()
+    chunk_log = []  # Log each streaming chunk for debugging
+    aggregated = None
+
+    async for chunk in agent_loop.backend.complete_streaming(
+        model=active_model,
+        messages=vibe_messages,
+        temperature=active_model.temperature,
+        tools=vibe_tools,
+        tool_choice=None,
+        extra_headers=agent_loop._get_extra_headers(provider),
+        max_tokens=None,
+        metadata=None,
+    ):
+        # Log each chunk
+        chunk_info = {
+            "text": chunk.message.content or "",
+            "reasoning": chunk.message.reasoning_content or "",
+            "tool_calls": _extract_tool_calls_from_msg(chunk.message),
+            "prompt_tokens": chunk.usage.prompt_tokens if chunk.usage else 0,
+            "completion_tokens": chunk.usage.completion_tokens if chunk.usage else 0,
+        }
+        if any(v for v in chunk_info.values()):  # Only log non-empty chunks
+            chunk_log.append(chunk_info)
+
+        if aggregated is None:
+            aggregated = chunk
+        else:
+            aggregated += chunk
+
+    elapsed = time.monotonic() - start
+
+    # Extract from aggregated result
+    if aggregated:
+        response_msg = aggregated.message
+        tool_calls_out = _extract_tool_calls_from_msg(response_msg)
+        text = response_msg.content or ""
+        reasoning = response_msg.reasoning_content or ""
+        usage = {
+            "prompt_tokens": aggregated.usage.prompt_tokens if aggregated.usage else 0,
+            "completion_tokens": aggregated.usage.completion_tokens if aggregated.usage else 0,
+        }
+    else:
+        tool_calls_out = []
+        text = ""
+        reasoning = ""
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+    # Also check: did any individual chunk have tool calls that got lost?
+    chunks_with_tool_calls = [c for c in chunk_log if c["tool_calls"]]
 
     return {
         "request": {
@@ -242,14 +289,68 @@ async def raw_llm_call(
             "tools": tools,
         },
         "response": {
+            "text": text,
+            "reasoning": reasoning,
+            "tool_calls": tool_calls_out,
+            "has_tool_calls": bool(tool_calls_out),
+        },
+        "streaming_debug": {
+            "total_chunks": len(chunk_log),
+            "chunks_with_tool_calls": len(chunks_with_tool_calls),
+            "chunk_log": chunk_log[:20],  # First 20 chunks for debugging
+        },
+        "timing": {
+            "elapsed_seconds": round(elapsed, 3),
+        },
+        "usage": usage,
+    }
+
+
+async def raw_llm_call_non_streaming(
+    agent_loop,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Make a raw LLM call using NON-STREAMING complete().
+
+    This is expected to be BROKEN for the openai-responses adapter because
+    it doesn't handle the non-streaming 'response' type.
+    """
+    vibe_messages = _msgs_to_vibe(messages)
+    vibe_tools = _tools_to_vibe(tools)
+
+    active_model = agent_loop.config.get_active_model()
+    provider = agent_loop.config.get_provider_for_model(active_model)
+
+    start = time.monotonic()
+    result = await agent_loop.backend.complete(
+        model=active_model,
+        messages=vibe_messages,
+        temperature=active_model.temperature,
+        tools=vibe_tools,
+        tool_choice=None,
+        extra_headers=agent_loop._get_extra_headers(provider),
+        max_tokens=None,
+        metadata=None,
+    )
+    elapsed = time.monotonic() - start
+
+    response_msg = result.message
+    tool_calls_out = _extract_tool_calls_from_msg(response_msg)
+
+    return {
+        "request": {
+            "messages_count": len(messages),
+            "messages": messages,
+            "tools_count": len(tools) if tools else 0,
+        },
+        "response": {
             "text": response_msg.content or "",
             "reasoning": response_msg.reasoning_content or "",
             "tool_calls": tool_calls_out,
             "has_tool_calls": bool(tool_calls_out),
         },
-        "timing": {
-            "elapsed_seconds": round(elapsed, 3),
-        },
+        "timing": {"elapsed_seconds": round(elapsed, 3)},
         "usage": {
             "prompt_tokens": result.usage.prompt_tokens if result.usage else 0,
             "completion_tokens": result.usage.completion_tokens if result.usage else 0,
@@ -313,13 +414,13 @@ def fake_tool_result(tool_name: str, args: dict) -> str:
 # ---------------------------------------------------------------------------
 
 async def test_single_tool_call(agent_loop, tool_defs: list[dict]) -> dict[str, Any]:
-    """Test 1: Can the agent make ONE correct tool call?
+    """Test 1: Can the agent make ONE correct tool call? (via streaming)
 
     Sends a simple prompt that should trigger exactly one tool call (read_file).
-    Checks whether the model provides correct arguments.
+    Uses complete_streaming() — the actual code path the agent uses.
     """
-    _header("TEST 1: Single Tool Call")
-    _info("Goal", "Can the agent make one correct tool call?")
+    _header("TEST 1: Single Tool Call (Streaming)")
+    _info("Goal", "Can the agent make one correct tool call via streaming?")
     _info("Prompt", "Read the file pyproject.toml and tell me the project name")
     print()
 
@@ -337,11 +438,24 @@ async def test_single_tool_call(agent_loop, tool_defs: list[dict]) -> dict[str, 
     ]
 
     # Call 1: Expect a tool call
-    print(f"  {C['dim']}--- LLM Call 1: Initial prompt ---{C['reset']}")
+    print(f"  {C['dim']}--- LLM Call 1 (streaming): Initial prompt ---{C['reset']}")
     result1 = await raw_llm_call(agent_loop, messages, tool_defs)
 
     call1_ok = False
     call1_tool_calls = result1["response"]["tool_calls"]
+
+    # Show streaming debug info
+    sd = result1.get("streaming_debug", {})
+    print(f"  {C['dim']}Streaming: {sd.get('total_chunks', 0)} chunks, {sd.get('chunks_with_tool_calls', 0)} had tool calls{C['reset']}")
+    if sd.get("chunks_with_tool_calls", 0) > 0:
+        _ok(f"Tool calls SEEN in streaming chunks")
+    elif sd.get("total_chunks", 0) > 0:
+        _warn(f"Streaming chunks received but NONE had tool calls")
+        # Show what the chunks contained
+        for i, chunk in enumerate(sd.get("chunk_log", [])[:5]):
+            text_preview = chunk.get("text", "")[:80]
+            tc_count = len(chunk.get("tool_calls", []))
+            print(f"    Chunk {i}: text='{text_preview}' tool_calls={tc_count}")
 
     if call1_tool_calls:
         for tc in call1_tool_calls:
@@ -353,7 +467,7 @@ async def test_single_tool_call(agent_loop, tool_defs: list[dict]) -> dict[str, 
                 _ok(f"Arguments provided for {tc['name']}")
                 call1_ok = True
     else:
-        text_preview = result1["response"]["text"][:200]
+        text_preview = result1["response"]["text"][:300]
         print(f"  No tool call — model responded with text: {text_preview}")
         _warn("Expected a tool call but got text response")
 
@@ -364,7 +478,7 @@ async def test_single_tool_call(agent_loop, tool_defs: list[dict]) -> dict[str, 
     print(f"  {C['dim']}Tokens: {result1['usage']['prompt_tokens']} in, {result1['usage']['completion_tokens']} out, {result1['timing']['elapsed_seconds']}s{C['reset']}")
 
     return {
-        "test": "single_tool_call",
+        "test": "single_tool_call_streaming",
         "passed": call1_ok,
         "llm_calls": [result1],
     }
@@ -610,38 +724,31 @@ async def test_three_tool_calls(agent_loop, tool_defs: list[dict]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 async def test_langchain_single_call(agent_loop, tool_defs: list[dict]) -> dict[str, Any]:
-    """Test 4: Same as Test 1, but through the LangChain tool pipeline.
+    """Test 4: Same as Test 1, but through VibeChatModel + LangChain streaming.
 
+    Uses _astream (which is what LangGraph actually calls), not ainvoke.
     This tests whether the LangChain/LangGraph layer introduces the problem.
-    If Test 1 passes but Test 4 fails, the issue is in the framework.
     """
-    _header("TEST 4: Single Tool Call via LangChain Pipeline")
+    _header("TEST 4: Single Tool Call via LangChain (streaming)")
     _info("Goal", "Does the LangChain layer introduce the empty-args bug?")
     print()
 
     from vibe.core.deepagent.adapters import build_langchain_tools, _tool_to_openai_schema
+    from vibe.core.deepagent.adapters import VibeChatModel
+    from langchain_core.messages import HumanMessage, SystemMessage, AIMessageChunk
 
     events_captured = []
-    tool_started_count = 0
-    tool_finished_count = 0
 
     async def emit_event(event):
         events_captured.append(event)
 
-    def on_started():
-        nonlocal tool_started_count
-        tool_started_count += 1
-
-    def on_finished():
-        nonlocal tool_finished_count
-        tool_finished_count += 1
+    def noop():
+        pass
 
     # Build LangChain tools
     lc_tools = build_langchain_tools(
-        agent_loop,
-        emit_event=emit_event,
-        on_tool_started=on_started,
-        on_tool_finished=on_finished,
+        agent_loop, emit_event=emit_event,
+        on_tool_started=noop, on_tool_finished=noop,
     )
 
     print(f"  Built {len(lc_tools)} LangChain tools:")
@@ -653,10 +760,6 @@ async def test_langchain_single_call(agent_loop, tool_defs: list[dict]) -> dict[
         props = list(params.get("properties", {}).keys())
         print(f"    {t.name}: required={required}, props={props}")
 
-    # Now make an LLM call with these tools bound to the model
-    from vibe.core.deepagent.adapters import VibeChatModel
-    from langchain_core.messages import HumanMessage, SystemMessage
-
     model = VibeChatModel(loop=agent_loop)
     model_with_tools = model.bind_tools(lc_tools)
 
@@ -666,14 +769,40 @@ async def test_langchain_single_call(agent_loop, tool_defs: list[dict]) -> dict[
     ))
     user_msg = HumanMessage(content="Read the file pyproject.toml and tell me the project name.")
 
-    print(f"\n  {C['dim']}--- LLM Call via LangChain ---{C['reset']}")
+    # Use _astream (the actual path LangGraph uses)
+    print(f"\n  {C['dim']}--- LLM Call via LangChain _astream ---{C['reset']}")
     start = time.monotonic()
-    response = await model_with_tools.ainvoke([system_msg, user_msg])
+
+    chunks_collected = []
+    aggregated = None
+    async for chunk_gen in model_with_tools.astream([system_msg, user_msg]):
+        chunk_info = {
+            "content": chunk_gen.content or "",
+            "tool_calls": getattr(chunk_gen, "tool_calls", []),
+            "tool_call_chunks": getattr(chunk_gen, "tool_call_chunks", []),
+        }
+        chunks_collected.append(chunk_info)
+        if aggregated is None:
+            aggregated = chunk_gen
+        else:
+            aggregated += chunk_gen
+
     elapsed = time.monotonic() - start
 
-    # Inspect response
-    tool_calls = getattr(response, "tool_calls", [])
-    text = response.content or ""
+    # Inspect aggregated result
+    tool_calls = getattr(aggregated, "tool_calls", []) if aggregated else []
+    tool_call_chunks_seen = sum(1 for c in chunks_collected if c["tool_call_chunks"])
+    text = (aggregated.content or "") if aggregated else ""
+
+    print(f"  {C['dim']}Chunks: {len(chunks_collected)} total, {tool_call_chunks_seen} had tool_call_chunks{C['reset']}")
+
+    # Show first few chunks that have tool_call_chunks
+    for i, c in enumerate(chunks_collected):
+        if c["tool_call_chunks"]:
+            print(f"    Chunk {i}: tool_call_chunks={json.dumps(c['tool_call_chunks'], default=str)[:200]}")
+            if i > 5:
+                print(f"    ... and more")
+                break
 
     call_ok = False
     if tool_calls:
@@ -696,9 +825,94 @@ async def test_langchain_single_call(agent_loop, tool_defs: list[dict]) -> dict[
     return {
         "test": "langchain_single_call",
         "passed": call_ok,
-        "tool_calls": tool_calls,
+        "tool_calls": [{"name": tc.get("name"), "args": tc.get("args")} for tc in tool_calls],
         "text": text[:500],
         "elapsed": round(elapsed, 3),
+        "chunks_total": len(chunks_collected),
+        "chunks_with_tool_call_chunks": tool_call_chunks_seen,
+    }
+
+
+async def test_non_streaming_comparison(agent_loop, tool_defs: list[dict]) -> dict[str, Any]:
+    """Test 5: Compare streaming vs non-streaming to confirm the parsing bug.
+
+    We expect non-streaming to FAIL (drops tool calls) and streaming to PASS.
+    This confirms the root cause is in the OpenAI Responses adapter.
+    """
+    _header("TEST 5: Streaming vs Non-Streaming Comparison")
+    _info("Goal", "Confirm non-streaming adapter drops tool calls")
+    print()
+
+    system_prompt = (
+        "You are a planning assistant. You have tools. "
+        "Read the file pyproject.toml using the read_file tool."
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Read pyproject.toml"},
+    ]
+
+    # Non-streaming
+    print(f"  {C['dim']}--- Non-streaming (complete()) ---{C['reset']}")
+    try:
+        ns_result = await raw_llm_call_non_streaming(agent_loop, messages, tool_defs)
+        ns_tc = ns_result["response"]["tool_calls"]
+        ns_text = ns_result["response"]["text"][:200]
+        ns_tokens = ns_result["usage"]["completion_tokens"]
+        if ns_tc:
+            _ok(f"Non-streaming: {len(ns_tc)} tool calls, {ns_tokens} tokens")
+            for tc in ns_tc:
+                print(f"    {tc['name']}({json.dumps(tc['arguments'])})")
+        else:
+            _fail(f"Non-streaming: NO tool calls despite {ns_tokens} completion tokens")
+            if ns_text:
+                print(f"    Text: {ns_text}")
+            else:
+                print(f"    (both text and tool_calls are empty — response dropped by parser)")
+    except Exception as e:
+        _fail(f"Non-streaming error: {e}")
+        ns_result = {"error": str(e)}
+
+    # Streaming
+    print(f"\n  {C['dim']}--- Streaming (complete_streaming()) ---{C['reset']}")
+    s_result = await raw_llm_call(agent_loop, messages, tool_defs)
+    s_tc = s_result["response"]["tool_calls"]
+    s_text = s_result["response"]["text"][:200]
+    s_tokens = s_result["usage"]["completion_tokens"]
+    sd = s_result.get("streaming_debug", {})
+
+    if s_tc:
+        _ok(f"Streaming: {len(s_tc)} tool calls, {s_tokens} tokens")
+        for tc in s_tc:
+            print(f"    {tc['name']}({json.dumps(tc['arguments'])})")
+    else:
+        _fail(f"Streaming: NO tool calls despite {s_tokens} completion tokens")
+        print(f"    Chunks: {sd.get('total_chunks', 0)}, with tool calls: {sd.get('chunks_with_tool_calls', 0)}")
+        if s_text:
+            print(f"    Text: {s_text}")
+
+    # Analysis
+    print(f"\n  {C['bold']}Analysis:{C['reset']}")
+    ns_has = bool(ns_result.get("response", {}).get("tool_calls")) if isinstance(ns_result, dict) else False
+    s_has = bool(s_tc)
+
+    if s_has and not ns_has:
+        _ok("CONFIRMED: Streaming works, non-streaming drops tool calls")
+        _info("Root cause", "OpenAI Responses adapter missing 'response' type handler")
+    elif s_has and ns_has:
+        _ok("Both work — non-streaming is NOT the issue")
+    elif not s_has and not ns_has:
+        _fail("NEITHER works — issue is deeper (model or request format)")
+    else:
+        _warn("Non-streaming works but streaming doesn't — unexpected")
+
+    return {
+        "test": "non_streaming_comparison",
+        "passed": s_has,  # Streaming should work
+        "streaming_tool_calls": s_tc,
+        "non_streaming_tool_calls": ns_result.get("response", {}).get("tool_calls", []) if isinstance(ns_result, dict) else [],
+        "streaming_result": s_result,
+        "non_streaming_result": ns_result,
     }
 
 
@@ -741,6 +955,7 @@ async def run_tests(test_num: int | None, output_path: Path) -> None:
         2: ("two_tool_calls", test_two_tool_calls),
         3: ("three_tool_calls", test_three_tool_calls),
         4: ("langchain_single_call", test_langchain_single_call),
+        5: ("non_streaming_comparison", test_non_streaming_comparison),
     }
 
     for num, (name, func) in tests.items():
@@ -783,8 +998,8 @@ def main() -> None:
         "--test", "-t",
         type=int,
         default=None,
-        choices=[1, 2, 3, 4],
-        help="Run only this test number (1-4). Default: run all.",
+        choices=[1, 2, 3, 4, 5],
+        help="Run only this test number (1-5). Default: run all.",
     )
     parser.add_argument(
         "--output", "-o",
