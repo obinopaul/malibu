@@ -201,6 +201,7 @@ class AgentLoop:
         self.conversation_id = str(uuid4())
         self.session_id = str(uuid4())
         self._current_user_message_id: str | None = None
+        self.pending_user_messages: asyncio.Queue[str] = asyncio.Queue()
         self._deepagent_runtime = (
             DeepAgentRuntime(self) if DeepAgentRuntime.is_supported() else None
         )
@@ -252,6 +253,10 @@ class AgentLoop:
 
         self.config.tools[tool_name].permission = permission
         self.tool_manager.invalidate_tool(tool_name)
+
+    def inject_user_message(self, msg: str) -> None:
+        """Queue a user message for processing after the current turn."""
+        self.pending_user_messages.put_nowait(msg)
 
     def emit_new_session_telemetry(self) -> None:
         entrypoint = (
@@ -482,6 +487,17 @@ class AgentLoop:
 
                 last_message = self.messages[-1]
                 should_break_loop = last_message.role != Role.tool
+
+                # If agent has more tool turns AND there's a queued user message,
+                # inject it as a new user turn within this agentic loop
+                if not should_break_loop and not self.pending_user_messages.empty():
+                    injected_text = self.pending_user_messages.get_nowait()
+                    injected_msg = LLMMessage(role=Role.user, content=injected_text)
+                    self.messages.append(injected_msg)
+                    self._current_user_message_id = injected_msg.message_id
+                    yield UserMessageEvent(
+                        content=injected_text, message_id=injected_msg.message_id
+                    )
 
                 if user_cancelled:
                     return

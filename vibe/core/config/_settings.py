@@ -257,6 +257,20 @@ class ModelConfig(BaseModel):
                 data["alias"] = data.get("name")
             if "display_name" not in data or data["display_name"] is None:
                 data["display_name"] = data.get("alias") or data.get("name")
+            # Normalize common thinking-level synonyms
+            _THINKING_ALIASES: dict[str, str] = {
+                "off": "none",
+                "false": "none",
+                "disabled": "none",
+                "on": "medium",
+                "true": "medium",
+                "enabled": "medium",
+            }
+            raw = data.get("thinking")
+            if isinstance(raw, str):
+                data["thinking"] = _THINKING_ALIASES.get(raw.lower(), raw.lower())
+            elif isinstance(raw, bool):
+                data["thinking"] = "none" if not raw else "medium"
         return data
 
 

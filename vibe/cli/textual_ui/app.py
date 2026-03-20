@@ -57,7 +57,9 @@ from vibe.cli.textual_ui.widgets.messages import (
     WarningMessage,
     WhatsNewMessage,
 )
+from vibe.cli.textual_ui.widgets.mode_picker import ModePickerApp
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
+from vibe.core.tools.mcp.registry import MCPRegistry
 from vibe.cli.textual_ui.widgets.path_display import PathDisplay
 from vibe.cli.textual_ui.widgets.proxy_setup_app import ProxySetupApp
 from vibe.cli.textual_ui.widgets.question_app import QuestionApp
@@ -141,6 +143,7 @@ class BottomApp(StrEnum):
     Approval = auto()
     Config = auto()
     Input = auto()
+    ModePicker = auto()
     PlanOptions = auto()
     ProxySetup = auto()
     Question = auto()
@@ -148,47 +151,82 @@ class BottomApp(StrEnum):
 
 
 class ChatScroll(VerticalScroll):
-    """Optimized scroll container that skips cascading style recalculations."""
+    """Optimized scroll container that skips cascading style recalculations.
+
+    Watches scroll position to suspend/resume streaming writes.  When the
+    user scrolls away from the bottom during streaming, we suspend
+    MarkdownStream writes to prevent widget mounts from colliding with
+    Textual's scroll layout pass (which causes the full compositor reflow
+    that freezes the terminal).  When they scroll back, writes resume and
+    the buffered content flushes in one batch.
+    """
 
     @property
     def is_at_bottom(self) -> bool:
         return self.scroll_offset.y >= (self.max_scroll_y - 3)
 
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        """React to scroll position changes during streaming."""
+        app = self.app
+        if not hasattr(app, "_on_chat_scroll_changed"):
+            return
+        # Only fire when the integer line changes to avoid excessive calls
+        if round(old_value) != round(new_value):
+            app._on_chat_scroll_changed(self.is_at_bottom)
+
     def update_node_styles(self, animate: bool = True) -> None:
         pass
 
 
-PRUNE_LOW_MARK = 1000
-PRUNE_HIGH_MARK = 1500
+PRUNE_LOW_MARK = 800
+PRUNE_HIGH_MARK = 1200
+
+# Widget-count cap inspired by DeepAgents CLI (WINDOW_SIZE=50).
+# Keeps the Textual DOM small so layout/style passes stay fast.
+PRUNE_WIDGET_CAP = 80
+PRUNE_WIDGET_KEEP = 50
 
 
 async def prune_oldest_children(
     messages_area: Widget, low_mark: int, high_mark: int
 ) -> bool:
-    """Remove the oldest children so the virtual height stays within bounds.
+    """Remove the oldest children so the DOM stays within bounds.
 
-    Walks children back-to-front to find how much to keep (up to *low_mark*
-    of visible height), then removes everything before that point.
+    Two pruning strategies (whichever fires first):
+    1. Height-based: if virtual height > high_mark, prune to low_mark
+    2. Count-based: if widget count > PRUNE_WIDGET_CAP, prune to PRUNE_WIDGET_KEEP
+
+    This mirrors DeepAgents CLI's approach of bounding DOM size so that
+    Textual's layout engine stays responsive during long sessions.
     """
-    total_height = messages_area.virtual_size.height
-    if total_height <= high_mark:
-        return False
-
     children = messages_area.children
     if not children:
         return False
 
-    accumulated = 0
-    cut = len(children)
+    total_height = messages_area.virtual_size.height
+    child_count = len(children)
 
-    for child in reversed(children):
-        if not child.display:
+    needs_height_prune = total_height > high_mark
+    needs_count_prune = child_count > PRUNE_WIDGET_CAP
+
+    if not needs_height_prune and not needs_count_prune:
+        return False
+
+    if needs_count_prune:
+        # Count-based: remove oldest widgets to get down to PRUNE_WIDGET_KEEP
+        cut = child_count - PRUNE_WIDGET_KEEP
+    else:
+        # Height-based: walk back-to-front keeping low_mark of visible height
+        accumulated = 0
+        cut = child_count
+        for child in reversed(children):
+            if not child.display:
+                cut -= 1
+                continue
+            accumulated += child.outer_size.height
             cut -= 1
-            continue
-        accumulated += child.outer_size.height
-        cut -= 1
-        if accumulated >= low_mark:
-            break
+            if accumulated >= low_mark:
+                break
 
     to_remove = list(children[:cut])
     if not to_remove:
@@ -246,6 +284,8 @@ class VibeApp(App):  # noqa: PLR0904
         self._pre_plan_agent_name: str | None = None
         self._pending_approval: asyncio.Future | None = None
         self._pending_question: asyncio.Future | None = None
+        self._approval_lock = asyncio.Lock()
+        self._question_lock = asyncio.Lock()
 
         self.event_handler: EventHandler | None = None
 
@@ -282,6 +322,8 @@ class VibeApp(App):  # noqa: PLR0904
         self._cached_loading_area: Widget | None = None
         self._switch_agent_generation = 0
         self._plan_info: PlanInfo | None = None
+        self._prune_scheduled = False
+        self._anchor_scheduled = False
 
     @property
     def config(self) -> VibeConfig:
@@ -314,6 +356,7 @@ class VibeApp(App):  # noqa: PLR0904
 
         with Horizontal(id="bottom-bar"):
             yield PathDisplay(self.config.displayed_workdir or Path.cwd())
+            yield NoMarkupStatic("", id="queue-indicator")
             yield NoMarkupStatic(id="spacer")
             yield ContextProgress()
 
@@ -396,7 +439,22 @@ class VibeApp(App):  # noqa: PLR0904
         input_widget.value = ""
 
         if self._agent_running:
-            await self._interrupt_agent_loop()
+            is_command = value.startswith("!") or value.startswith("&") or value.startswith("/")
+            if is_command:
+                # Commands still interrupt immediately
+                await self._interrupt_agent_loop()
+            else:
+                # Queue regular messages instead of interrupting
+                self.agent_loop.inject_user_message(value)
+                depth = self.agent_loop.pending_user_messages.qsize()
+                await self._mount_and_scroll(UserMessage(value, pending=True))
+                await self._mount_and_scroll(
+                    UserCommandMessage(
+                        f"Queued (position {depth}) — will run after the current turn."
+                    )
+                )
+                self._update_queue_indicator()
+                return
 
         if value.startswith("!"):
             await self._handle_bash_command(value[1:])
@@ -548,7 +606,7 @@ class VibeApp(App):  # noqa: PLR0904
             await self._mount_and_scroll(UserMessage(user_input))
             handler = getattr(self, command.handler)
             args = command_args.strip()
-            if command.handler == "_show_model":
+            if command.handler in ("_show_model", "_mode_command"):
                 await handler(args)
                 return True
             if asyncio.iscoroutinefunction(handler):
@@ -673,7 +731,7 @@ class VibeApp(App):  # noqa: PLR0904
             start_index=plan.tail_start_index,
         )
         chat = self._cached_chat or self.query_one("#chat", ChatScroll)
-        self.call_after_refresh(chat.anchor)
+        self.call_after_refresh(lambda: chat.scroll_end(animate=False))
         self._tool_call_map = plan.tool_call_map
         self._windowing.set_backfill(plan.backfill_messages)
         await self._load_more.set_visible(
@@ -723,26 +781,37 @@ class VibeApp(App):  # noqa: PLR0904
             if self._is_tool_enabled_in_main_agent(tool):
                 return (ApprovalResponse.YES, None)
 
-        self._pending_approval = asyncio.Future()
-        self._terminal_notifier.notify(NotificationContext.ACTION_REQUIRED)
-        with paused_timer(self._loading_widget):
-            await self._switch_to_approval_app(tool, args)
-            result = await self._pending_approval
+        # Serialize approval requests so parallel tool calls queue up
+        # and the user sees them one at a time
+        async with self._approval_lock:
+            # Re-check permission after acquiring the lock — a previous approval
+            # in the queue may have granted "always allow" for this same tool
+            tool_cfg = self.agent_loop.config.tools.get(tool)
+            if tool_cfg and tool_cfg.permission == ToolPermission.ALWAYS:
+                return (ApprovalResponse.YES, None)
 
-        self._pending_approval = None
-        return result
+            self._pending_approval = asyncio.Future()
+            self._terminal_notifier.notify(NotificationContext.ACTION_REQUIRED)
+            with paused_timer(self._loading_widget):
+                await self._switch_to_approval_app(tool, args)
+                result = await self._pending_approval
+
+            self._pending_approval = None
+            return result
 
     async def _user_input_callback(self, args: BaseModel) -> BaseModel:
         question_args = cast(AskUserQuestionArgs, args)
 
-        self._pending_question = asyncio.Future()
-        self._terminal_notifier.notify(NotificationContext.ACTION_REQUIRED)
-        with paused_timer(self._loading_widget):
-            await self._switch_to_question_app(question_args)
-            result = await self._pending_question
+        # Serialize question requests the same way as approvals
+        async with self._question_lock:
+            self._pending_question = asyncio.Future()
+            self._terminal_notifier.notify(NotificationContext.ACTION_REQUIRED)
+            with paused_timer(self._loading_widget):
+                await self._switch_to_question_app(question_args)
+                result = await self._pending_question
 
-        self._pending_question = None
-        return result
+            self._pending_question = None
+            return result
 
     async def _handle_agent_loop_turn(self, prompt: str) -> None:
         self._agent_running = True
@@ -803,6 +872,33 @@ class VibeApp(App):  # noqa: PLR0904
             self._plan_collected_text.extend(turn_text_chunks)
             plan_text = "".join(self._plan_collected_text)
             await self._switch_to_plan_options_app(plan_text)
+        elif not self.agent_loop.pending_user_messages.empty():
+            await self._drain_message_queue()
+
+    async def _drain_message_queue(self) -> None:
+        """Process the next queued message after the current turn completes."""
+        if self.agent_loop.pending_user_messages.empty():
+            self._update_queue_indicator()
+            return
+        next_msg = self.agent_loop.pending_user_messages.get_nowait()
+        self._update_queue_indicator()
+        self._agent_task = asyncio.create_task(
+            self._handle_agent_loop_turn(next_msg)
+        )
+
+    def _update_queue_indicator(self) -> None:
+        """Update the bottom bar queue depth display."""
+        depth = self.agent_loop.pending_user_messages.qsize()
+        try:
+            indicator = self.query_one("#queue-indicator", NoMarkupStatic)
+            if depth > 0:
+                indicator.update(f" {depth} queued ")
+                indicator.display = True
+            else:
+                indicator.update("")
+                indicator.display = False
+        except Exception:
+            pass
 
     def _rate_limit_message(self) -> str:
         upgrade_to_pro = self._plan_info and self._plan_info.plan_type in {
@@ -911,6 +1007,11 @@ class VibeApp(App):  # noqa: PLR0904
 
         self._interrupt_requested = True
 
+        # Clear queued messages — user explicitly chose to interrupt
+        while not self.agent_loop.pending_user_messages.empty():
+            self.agent_loop.pending_user_messages.get_nowait()
+        self._update_queue_indicator()
+
         if self._agent_task and not self._agent_task.done():
             self._agent_task.cancel()
             try:
@@ -950,6 +1051,137 @@ class VibeApp(App):  # noqa: PLR0904
 - **Cost**: ${stats.session_cost:.4f}
 """
         await self._mount_and_scroll(UserCommandMessage(status_text))
+
+    async def _show_mcp(self) -> None:
+        servers = self.agent_loop.config.mcp_servers
+        if not servers:
+            await self._mount_and_scroll(
+                UserCommandMessage("No MCP servers configured.")
+            )
+            return
+
+        registry = self.agent_loop._mcp_registry
+        lines = ["## MCP Servers\n"]
+        total_tools = 0
+
+        for srv in servers:
+            key = MCPRegistry._server_key(srv)
+            cached = registry._cache.get(key)
+            tool_names = sorted(cached.keys()) if cached else []
+            total_tools += len(tool_names)
+
+            lines.append(f"### {srv.name} ({srv.transport})")
+            if srv.transport in ("http", "streamable-http"):
+                lines.append(f"- **URL:** {srv.url}")
+            elif srv.transport == "stdio":
+                cmd = " ".join(srv.argv()) if srv.argv() else str(srv.command)
+                lines.append(f"- **Command:** `{cmd}`")
+
+            if tool_names:
+                lines.append(f"- **Tools ({len(tool_names)}):** {', '.join(tool_names)}")
+            elif cached is not None:
+                lines.append("- **Tools:** (none discovered)")
+            else:
+                lines.append("- **Tools:** (discovery failed or pending)")
+            lines.append("")
+
+        lines.append(f"---\n{len(servers)} server(s), {total_tools} tool(s) total")
+        await self._mount_and_scroll(UserCommandMessage("\n".join(lines)))
+
+    async def _mode_command(self, mode_name: str = "") -> None:
+        """Switch agent mode or show the mode picker."""
+        if self._agent_running:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Cannot switch mode while agent is running. Please wait.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+
+        manager = self.agent_loop.agent_manager
+        current = self.agent_loop.agent_profile
+        order = manager.get_agent_order()
+        agents = {name: manager.available_agents[name] for name in order}
+
+        if mode_name:
+            # Direct switch: /mode accept-edits
+            await self._apply_mode_switch(mode_name.lower().strip(), agents, current)
+            return
+
+        # No args — show the interactive picker
+        modes = [
+            (name, agents[name].display_name, agents[name].description)
+            for name in order
+        ]
+        picker = ModePickerApp(modes=modes, current_mode=current.name)
+        await self._switch_from_input(picker)
+
+    async def _apply_mode_switch(
+        self,
+        target: str,
+        agents: dict[str, AgentProfile],
+        current: AgentProfile,
+    ) -> None:
+        """Perform the actual agent mode switch."""
+        if target not in agents:
+            available = ", ".join(f"`{n}`" for n in agents)
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Unknown mode: `{target}`. Available: {available}",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+
+        if target == current.name:
+            await self._mount_and_scroll(
+                WarningMessage(f"Already in **{current.display_name}** mode.")
+            )
+            return
+
+        # If switching to plan, delegate to the existing plan command
+        if target == BuiltinAgentName.PLAN:
+            await self._plan_command()
+            return
+
+        # If currently in plan mode, exit it first
+        if self._plan_mode:
+            self._plan_mode = False
+            self._plan_collected_text = []
+            self._pre_plan_agent_name = None
+            await self._switch_to_input_app()
+
+        target_profile = agents[target]
+        self._switch_agent_generation += 1
+        my_gen = self._switch_agent_generation
+
+        if self._chat_input_container:
+            self._chat_input_container.switching_mode = True
+
+        def do_switch() -> None:
+            try:
+                asyncio.run(self.agent_loop.switch_agent(target))
+                self.agent_loop.set_approval_callback(self._approval_callback)
+                self.agent_loop.set_user_input_callback(self._user_input_callback)
+            finally:
+                if (
+                    self._chat_input_container
+                    and self._switch_agent_generation == my_gen
+                ):
+                    self.call_from_thread(
+                        setattr, self._chat_input_container, "switching_mode", False
+                    )
+                self.call_from_thread(self._refresh_profile_widgets)
+
+        self.run_worker(do_switch, group="switch_agent", exclusive=True, thread=True)
+
+        await self._mount_and_scroll(
+            UserCommandMessage(
+                f"Switched to **{target_profile.display_name}** mode: "
+                f"{target_profile.description}"
+            )
+        )
 
     async def _show_config(self) -> None:
         """Switch to the configuration app in the bottom panel."""
@@ -1087,6 +1319,21 @@ class VibeApp(App):  # noqa: PLR0904
         await self._switch_to_input_app()
 
         await self._mount_and_scroll(UserCommandMessage("Resume cancelled."))
+
+    async def on_mode_picker_app_mode_selected(
+        self, event: ModePickerApp.ModeSelected
+    ) -> None:
+        await self._switch_to_input_app()
+        manager = self.agent_loop.agent_manager
+        current = self.agent_loop.agent_profile
+        order = manager.get_agent_order()
+        agents = {name: manager.available_agents[name] for name in order}
+        await self._apply_mode_switch(event.mode_name, agents, current)
+
+    async def on_mode_picker_app_cancelled(
+        self, _event: ModePickerApp.Cancelled
+    ) -> None:
+        await self._switch_to_input_app()
 
     async def _reload_config(self) -> None:
         try:
@@ -1412,12 +1659,20 @@ class VibeApp(App):  # noqa: PLR0904
             self._chat_input_container.display = False
             self._chat_input_container.disabled = True
 
+        # Remove any existing widget with the same ID to prevent collision
+        if widget.id:
+            try:
+                existing = bottom_container.query_one(f"#{widget.id}")
+                await existing.remove()
+            except Exception:
+                pass
+
         self._current_bottom_app = BottomApp[type(widget).__name__.removesuffix("App")]
         await bottom_container.mount(widget)
 
         self.call_after_refresh(widget.focus)
         if should_scroll:
-            self.call_after_refresh(chat.anchor)
+            self.call_after_refresh(lambda: chat.scroll_end(animate=False))
 
     async def _switch_to_config_app(self, initial_key: str = "provider") -> None:
         if self._current_bottom_app == BottomApp.Config:
@@ -1460,7 +1715,7 @@ class VibeApp(App):  # noqa: PLR0904
             self.call_after_refresh(self._chat_input_container.focus_input)
             chat = self._cached_chat or self.query_one("#chat", ChatScroll)
             if chat.is_at_bottom:
-                self.call_after_refresh(chat.anchor)
+                self.call_after_refresh(lambda: chat.scroll_end(animate=False))
 
     def _focus_current_bottom_app(self) -> None:
         try:
@@ -1584,7 +1839,7 @@ class VibeApp(App):  # noqa: PLR0904
         self._last_escape_time = current_time
         chat = self._cached_chat or self.query_one("#chat", ChatScroll)
         if chat.is_at_bottom:
-            self.call_after_refresh(chat.anchor)
+            self.call_after_refresh(lambda: chat.scroll_end(animate=False))
         self._focus_current_bottom_app()
 
     async def on_history_load_more_requested(self, _: HistoryLoadMoreRequested) -> None:
@@ -1701,6 +1956,33 @@ class VibeApp(App):  # noqa: PLR0904
 
         self.exit(result=self._get_session_resume_info())
 
+    def _on_chat_scroll_changed(self, at_bottom: bool) -> None:
+        """Called by ChatScroll.watch_scroll_y when scroll position changes.
+
+        Suspends streaming writes when the user scrolls away from the bottom
+        and resumes them when they scroll back.  This prevents the collision
+        between Markdown.append() widget mounts (which set _layout_required)
+        and scroll reflow (which needs the fast path to stay responsive).
+        """
+        if not self.event_handler:
+            return
+
+        msg = self.event_handler.current_streaming_message
+        reasoning = self.event_handler.current_streaming_reasoning
+
+        if at_bottom:
+            # User scrolled back to bottom — resume writes and flush buffer
+            if msg and msg._writes_suspended:
+                asyncio.ensure_future(msg.resume_writes())
+            if reasoning and reasoning._writes_suspended:
+                asyncio.ensure_future(reasoning.resume_writes())
+        else:
+            # User scrolled away — suspend writes to keep scroll responsive
+            if msg and not msg._writes_suspended:
+                msg.suspend_writes()
+            if reasoning and not reasoning._writes_suspended:
+                reasoning.suspend_writes()
+
     def action_scroll_chat_up(self) -> None:
         try:
             chat = self._cached_chat or self.query_one("#chat", ChatScroll)
@@ -1746,7 +2028,7 @@ class VibeApp(App):  # noqa: PLR0904
             await chat.mount(whats_new_message, after=messages_area)
             self._whats_new_message = whats_new_message
             if should_anchor:
-                chat.anchor()
+                chat.scroll_end(animate=False)
         await mark_version_as_seen(self._current_version, self._update_cache_repository)
 
     async def _resolve_plan(self) -> None:
@@ -1777,7 +2059,6 @@ class VibeApp(App):  # noqa: PLR0904
         chat = self._cached_chat or self.query_one("#chat", ChatScroll)
 
         is_user_initiated = isinstance(widget, (UserMessage, UserCommandMessage))
-        should_anchor = is_user_initiated or chat.is_at_bottom
 
         if after is not None and after.parent is messages_area:
             await messages_area.mount(widget, after=after)
@@ -1786,9 +2067,22 @@ class VibeApp(App):  # noqa: PLR0904
         if isinstance(widget, StreamingMessageBase):
             await widget.write_initial_content()
 
-        self.call_after_refresh(self._try_prune)
-        if should_anchor:
-            chat.anchor()
+        # Prune: debounce to at most once per 500ms during rapid mounts
+        if not self._prune_scheduled:
+            self._prune_scheduled = True
+            self.set_timer(0.5, self._debounced_prune)
+
+        # Sticky scroll (DeepAgents CLI pattern):
+        # - User messages always scroll to bottom
+        # - Otherwise only scroll if user is already near the bottom
+        # - Uses scroll_end(animate=False) which is cheaper than anchor()
+        #   because anchor() triggers a full layout recompose
+        if is_user_initiated:
+            chat.scroll_end(animate=False)
+        elif chat.is_at_bottom:
+            if not self._anchor_scheduled:
+                self._anchor_scheduled = True
+                self.set_timer(0.1, self._debounced_anchor)
 
     def _set_reasoning_panel_visible(self, visible: bool) -> None:
         panel = self._cached_reasoning_panel
@@ -1807,7 +2101,7 @@ class VibeApp(App):  # noqa: PLR0904
         if isinstance(widget, StreamingMessageBase):
             await widget.write_initial_content()
         if chat.is_at_bottom:
-            chat.anchor()
+            chat.scroll_end(animate=False)
 
     async def _clear_live_reasoning(self) -> None:
         reasoning_area = self._cached_reasoning_area
@@ -1825,7 +2119,19 @@ class VibeApp(App):  # noqa: PLR0904
         if pruned:
             chat = self._cached_chat or self.query_one("#chat", ChatScroll)
             if chat.is_at_bottom:
-                self.call_later(chat.anchor)
+                self.call_later(lambda: chat.scroll_end(animate=False))
+
+    async def _debounced_prune(self) -> None:
+        self._prune_scheduled = False
+        await self._try_prune()
+
+    def _debounced_anchor(self) -> None:
+        self._anchor_scheduled = False
+        chat = self._cached_chat or self.query_one("#chat", ChatScroll)
+        # scroll_end is cheaper than anchor() — it jumps to max_scroll_y
+        # without triggering Textual's full recompose/layout pass
+        if chat.is_at_bottom:
+            chat.scroll_end(animate=False)
 
     async def _refresh_windowing_from_history(self) -> None:
         if self._load_more.widget is None:

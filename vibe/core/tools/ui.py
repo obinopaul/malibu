@@ -10,6 +10,53 @@ if TYPE_CHECKING:
     from vibe.core.types import ToolCallEvent, ToolResultEvent
 
 
+TOOL_DISPLAY_NAMES: dict[str, str] = {
+    # File operations
+    "read_file": "Read File",
+    "write_file": "Write File",
+    "apply_patch": "Apply Patch",
+    "search_replace": "Search & Replace",
+    # Code search
+    "grep": "Grep",
+    "ast_grep": "AST Search",
+    # LSP / Symbol tools
+    "find_symbol": "Find Symbol",
+    "find_referencing_symbols": "Find References",
+    "rename_symbol": "Rename Symbol",
+    "insert_before_symbol": "Insert Before Symbol",
+    "insert_after_symbol": "Insert After Symbol",
+    "replace_symbol_body": "Replace Symbol Body",
+    # Execution
+    "bash": "Bash",
+    # Shell sessions
+    "shell_init": "Shell Init",
+    "shell_list": "Shell List",
+    "shell_run": "Shell Run",
+    "shell_view": "Shell View",
+    "shell_stop": "Shell Stop",
+    "shell_write": "Shell Write",
+    # Git
+    "git": "Git",
+    "git_worktree": "Git Worktree",
+    # Snapshot
+    "snapshot": "Snapshot",
+    # Web
+    "webfetch": "Web Fetch",
+    "websearch": "Web Search",
+    # Interaction
+    "ask_user_question": "Ask User",
+    # Planning / tasks
+    "task": "Task",
+    "todo": "Todo",
+    "exit_plan_mode": "Exit Plan Mode",
+}
+
+
+def get_tool_display_name(tool_name: str) -> str:
+    """Return human-readable display name for a tool, falling back to the raw name."""
+    return TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+
+
 class ToolCallDisplay(BaseModel):
     summary: str  # Brief description: "Writing file.txt", "Patching code.py"
     content: str | None = None  # Optional content preview
@@ -25,7 +72,8 @@ class ToolUIData[TArgs: BaseModel, TResult: BaseModel](ABC):
     @classmethod
     def _display_name(cls) -> str:
         get_name = cast(Callable[[], str] | None, getattr(cls, "get_name", None))
-        return get_name() if get_name is not None else cls.__name__.lower()
+        raw_name = get_name() if get_name is not None else cls.__name__.lower()
+        return get_tool_display_name(raw_name)
 
     @classmethod
     def get_no_args_display(cls) -> ToolCallDisplay:
@@ -97,7 +145,8 @@ class ToolUIDataAdapter:
             else {}
         )
         args_str = ", ".join(f"{k}={v!r}" for k, v in list(args_dict.items())[:3])
-        return ToolCallDisplay(summary=f"{event.tool_name}({args_str})")
+        display_name = get_tool_display_name(event.tool_name)
+        return ToolCallDisplay(summary=f"{display_name}({args_str})")
 
     def get_result_display(self, event: ToolResultEvent) -> ToolResultDisplay:
         if event.error:
@@ -118,4 +167,4 @@ class ToolUIDataAdapter:
             return self.ui_data_class.get_status_text()
 
         tool_name = getattr(self.tool_class, "get_name", lambda: "tool")()
-        return f"Running {tool_name}"
+        return f"Running {get_tool_display_name(tool_name)}"

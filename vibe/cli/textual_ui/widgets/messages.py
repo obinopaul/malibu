@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 
 from textual.app import ComposeResult
@@ -61,12 +63,40 @@ class UserMessage(Static):
 
 
 class StreamingMessageBase(Static):
+    """Base class for messages that stream content incrementally.
+
+    Two performance mechanisms work together to prevent terminal freezes:
+
+    1. **Adaptive render throttle** (from Aider's mdstream.py):
+       Measures how long each MarkdownStream.write() takes, then sets the
+       minimum interval to 10x the render cost. Fast terminals get ~20 FPS;
+       slow terminals auto-degrade to 2 FPS instead of freezing.
+
+    2. **Write suspension** (from Textual internals analysis):
+       When the user scrolls away from the bottom during streaming, writes
+       are suspended — tokens accumulate in a buffer but NO MarkdownStream
+       writes happen. This is critical because Markdown.append() mounts new
+       child widgets which set _layout_required=True, causing scroll events
+       to bypass Textual's fast reflow path and trigger expensive full
+       compositor reflows. Suspending writes during scroll eliminates this
+       collision entirely.
+    """
+
+    _MIN_INTERVAL = 0.05   # 20 FPS floor — never render faster than this
+    _MAX_INTERVAL = 0.5    # 2 FPS ceiling — never render slower than this
+    _RENDER_COST_MULTIPLIER = 10  # interval = render_time * this
+
     def __init__(self, content: str) -> None:
         super().__init__()
         self._content = content
         self._markdown: Markdown | None = None
         self._stream: MarkdownStream | None = None
         self._content_initialized = False
+        self._pending_content = ""
+        self._last_write_time = 0.0
+        self._write_interval = self._MIN_INTERVAL
+        self._flush_timer: asyncio.TimerHandle | None = None
+        self._writes_suspended = False
 
     def _get_markdown(self) -> Markdown:
         if self._markdown is None:
@@ -80,14 +110,78 @@ class StreamingMessageBase(Static):
             self._stream = Markdown.get_stream(self._get_markdown())
         return self._stream
 
+    def suspend_writes(self) -> None:
+        """Suspend MarkdownStream writes. Tokens keep accumulating in the
+        buffer but nothing is rendered. Call this when the user scrolls away
+        from the bottom to prevent widget mounts from colliding with scroll
+        layout passes."""
+        self._writes_suspended = True
+        # Cancel any pending flush timer — we don't want it firing while
+        # suspended since it would try to write
+        if self._flush_timer is not None:
+            self._flush_timer.cancel()
+            self._flush_timer = None
+
+    async def resume_writes(self) -> None:
+        """Resume writes and flush all buffered content in one batch.
+        Call this when the user scrolls back to the bottom."""
+        if not self._writes_suspended:
+            return
+        self._writes_suspended = False
+        # Flush everything that accumulated while suspended — one big write
+        # is much cheaper than many small ones
+        await self._flush_pending()
+
     async def append_content(self, content: str) -> None:
         if not content:
             return
 
         self._content += content
+        self._pending_content += content
+
+        # When suspended, just accumulate — don't schedule any writes.
+        # The content is safe in _pending_content and _content.
+        if self._writes_suspended:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._last_write_time
+
+        if elapsed >= self._write_interval:
+            await self._flush_pending()
+        elif self._flush_timer is None:
+            delay = self._write_interval - elapsed
+            loop = asyncio.get_running_loop()
+            self._flush_timer = loop.call_later(
+                delay, lambda: asyncio.ensure_future(self._flush_pending())
+            )
+
+    async def _flush_pending(self) -> None:
+        if self._flush_timer is not None:
+            self._flush_timer.cancel()
+            self._flush_timer = None
+        if not self._pending_content:
+            return
+        # Don't flush while suspended — content stays in buffer
+        if self._writes_suspended:
+            return
+
+        text = self._pending_content
+        self._pending_content = ""
+
         if self._should_write_content():
             stream = self._ensure_stream()
-            await stream.write(content)
+            t0 = time.monotonic()
+            await stream.write(text)
+            render_time = time.monotonic() - t0
+
+            # Adaptive throttle: back off proportionally to render cost
+            self._write_interval = min(
+                max(render_time * self._RENDER_COST_MULTIPLIER, self._MIN_INTERVAL),
+                self._MAX_INTERVAL,
+            )
+
+        self._last_write_time = time.monotonic()
 
     async def write_initial_content(self) -> None:
         if self._content_initialized:
@@ -97,9 +191,11 @@ class StreamingMessageBase(Static):
             await stream.write(self._content)
 
     async def stop_stream(self) -> None:
+        # Force-resume so all buffered content is flushed before stopping
+        self._writes_suspended = False
+        await self._flush_pending()
         if self._stream is None:
             return
-
         await self._stream.stop()
         self._stream = None
 

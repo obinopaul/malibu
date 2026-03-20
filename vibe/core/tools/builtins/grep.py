@@ -121,7 +121,19 @@ class Grep(
 
         exclude_patterns = self._collect_exclude_patterns()
         cmd = self._build_command(args, exclude_patterns, backend)
-        stdout = await self._execute_search(cmd)
+
+        try:
+            stdout = await self._execute_search(cmd)
+        except ToolError as exc:
+            # If regex mode failed, retry with fixed-string mode as a fallback
+            if not self._needs_fixed_string(args.pattern):
+                fixed_args = args.model_copy(deep=True)
+                fixed_cmd = self._build_command_fixed(
+                    fixed_args, exclude_patterns, backend
+                )
+                stdout = await self._execute_search(fixed_cmd)
+            else:
+                raise exc
 
         yield self._parse_output(
             stdout, args.max_matches or self.config.default_max_matches
@@ -129,14 +141,27 @@ class Grep(
 
     @staticmethod
     def _needs_fixed_string(pattern: str) -> bool:
-        """Return True if the pattern looks like a literal string with
-        unbalanced regex metacharacters.  In that case we use fixed-string
-        mode (-F) instead of regex so the search doesn't fail."""
-        import re
+        """Return True if the pattern should use fixed-string mode (-F)
+        instead of regex.  Checks against both Python regex *and* common
+        POSIX ERE / ripgrep incompatibilities so we don't pass patterns
+        that only one engine understands."""
+        import re as _re
+
+        # Fails Python regex → definitely not a valid regex anywhere
         try:
-            re.compile(pattern)
-        except re.error:
+            _re.compile(pattern)
+        except _re.error:
             return True
+
+        # Python-only constructs that POSIX ERE and ripgrep reject
+        _PYTHON_ONLY = (
+            r"(?P<", r"(?P=", r"(?#",          # named groups, comments
+            r"(?<=", r"(?<!", r"(?=", r"(?!",   # look-around
+            r"(?:",                              # non-capturing group (POSIX ERE)
+        )
+        if any(tok in pattern for tok in _PYTHON_ONLY):
+            return True
+
         return False
 
     def _validate_args(self, args: GrepArgs) -> None:
@@ -179,8 +204,24 @@ class Grep(
             return self._build_ripgrep_command(args, exclude_patterns)
         return self._build_gnu_grep_command(args, exclude_patterns)
 
+    def _build_command_fixed(
+        self, args: GrepArgs, exclude_patterns: list[str], backend: GrepBackend
+    ) -> list[str]:
+        """Build a command that forces fixed-string mode (no regex)."""
+        if backend == GrepBackend.RIPGREP:
+            return self._build_ripgrep_command(
+                args, exclude_patterns, force_fixed=True
+            )
+        return self._build_gnu_grep_command(
+            args, exclude_patterns, force_fixed=True
+        )
+
     def _build_ripgrep_command(
-        self, args: GrepArgs, exclude_patterns: list[str]
+        self,
+        args: GrepArgs,
+        exclude_patterns: list[str],
+        *,
+        force_fixed: bool = False,
     ) -> list[str]:
         max_matches = args.max_matches or self.config.default_max_matches
 
@@ -195,7 +236,7 @@ class Grep(
             str(max_matches + 1),
         ]
 
-        if self._needs_fixed_string(args.pattern):
+        if force_fixed or self._needs_fixed_string(args.pattern):
             cmd.append("--fixed-strings")
 
         if not args.use_default_ignore:
@@ -209,11 +250,15 @@ class Grep(
         return cmd
 
     def _build_gnu_grep_command(
-        self, args: GrepArgs, exclude_patterns: list[str]
+        self,
+        args: GrepArgs,
+        exclude_patterns: list[str],
+        *,
+        force_fixed: bool = False,
     ) -> list[str]:
         max_matches = args.max_matches or self.config.default_max_matches
 
-        if self._needs_fixed_string(args.pattern):
+        if force_fixed or self._needs_fixed_string(args.pattern):
             cmd = ["grep", "-r", "-n", "-I", "-F", f"--max-count={max_matches + 1}"]
         else:
             cmd = ["grep", "-r", "-n", "-I", "-E", f"--max-count={max_matches + 1}"]

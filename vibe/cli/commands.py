@@ -87,6 +87,16 @@ class CommandRegistry:
                 description="Switch to plan mode with a dedicated planning agent",
                 handler="_plan_command",
             ),
+            "mcp": Command(
+                aliases=frozenset(["/mcp"]),
+                description="List connected MCP servers and their tools",
+                handler="_show_mcp",
+            ),
+            "mode": Command(
+                aliases=frozenset(["/mode"]),
+                description="Switch agent mode (default, plan, accept-edits, auto-approve)",
+                handler="_mode_command",
+            ),
         }
 
         for command in excluded_commands:

@@ -13,6 +13,7 @@ from textual.widgets import Static
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
 from vibe.cli.textual_ui.widgets.tool_widgets import get_approval_widget
 from vibe.core.config import VibeConfig
+from vibe.core.tools.ui import get_tool_display_name
 
 
 class ApprovalApp(Container):
@@ -80,7 +81,7 @@ class ApprovalApp(Container):
 
         with Vertical(id="approval-content"):
             self.title_widget = NoMarkupStatic(
-                f"⚠ {self.tool_name} command", classes="approval-title"
+                f"⚠ {get_tool_display_name(self.tool_name)} command", classes="approval-title"
             )
             yield self.title_widget
 
@@ -106,7 +107,7 @@ class ApprovalApp(Container):
     def _update_options(self) -> None:
         options = [
             ("Yes", "yes"),
-            (f"Yes and always allow {self.tool_name} for this session", "yes"),
+            (f"Yes and always allow {get_tool_display_name(self.tool_name)} for this session", "yes"),
             ("No and tell the agent what to do instead", "no"),
         ]
 

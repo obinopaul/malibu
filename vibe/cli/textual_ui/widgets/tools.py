@@ -8,7 +8,7 @@ from vibe.cli.textual_ui.widgets.messages import ExpandingBorder, NonSelectableS
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
 from vibe.cli.textual_ui.widgets.status_message import StatusMessage
 from vibe.cli.textual_ui.widgets.tool_widgets import get_result_widget
-from vibe.core.tools.ui import ToolUIDataAdapter
+from vibe.core.tools.ui import ToolUIDataAdapter, get_tool_display_name
 from vibe.core.types import ToolCallEvent, ToolResultEvent
 
 
@@ -61,7 +61,7 @@ class ToolCallMessage(StatusMessage):
             adapter = ToolUIDataAdapter(self._event.tool_class)
             display = adapter.get_call_display(self._event)
             return display.summary
-        return self._tool_name
+        return get_tool_display_name(self._tool_name)
 
     def update_event(self, event: ToolCallEvent) -> None:
         self._event = event
@@ -139,21 +139,23 @@ class ToolResultMessage(Static):
         return True
 
     def _get_result_text(self) -> str:
+        display_name = get_tool_display_name(self._tool_name)
+
         if self._event is None:
-            return f"{self._tool_name} completed"
+            return f"{display_name} completed"
 
         if self._event.error:
-            return f"{self._tool_name}: error"
+            return f"{display_name}: error"
 
         if self._event.skipped:
-            return f"{self._tool_name}: skipped"
+            return f"{display_name}: skipped"
 
         if self._event.tool_class:
             adapter = ToolUIDataAdapter(self._event.tool_class)
             display = adapter.get_result_display(self._event)
             return display.message
 
-        return f"{self._tool_name} completed"
+        return f"{display_name} completed"
 
     async def _render_result(self) -> None:
         if self._content_container is None:

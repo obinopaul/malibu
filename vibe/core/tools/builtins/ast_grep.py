@@ -68,7 +68,19 @@ class AstGrep(
         self, args: AstGrepArgs, ctx: InvokeContext | None = None
     ) -> AsyncGenerator[ToolStreamEvent | AstGrepResult, None]:
         executable = self._find_executable()
-        search_path = ensure_existing_directory(resolve_tool_path(args.path))
+        resolved = resolve_tool_path(args.path)
+
+        # If the user passed a file path, search its parent directory
+        # and scope results to that file via --globs
+        if resolved.is_file():
+            search_path = resolved.parent
+            # Merge with any existing include filter
+            args = args.model_copy(
+                update={"include": resolved.name},
+            )
+        else:
+            search_path = ensure_existing_directory(resolved)
+
         self._validate_args(args)
 
         command = self._build_command(executable, args, search_path)

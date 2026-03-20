@@ -88,6 +88,15 @@ TextArea > .text-area--cursor {
     layout: horizontal;
 }
 
+#queue-indicator {
+    width: auto;
+    height: auto;
+    background: transparent;
+    padding: 0 1;
+    color: ansi_magenta;
+    text-style: bold;
+}
+
 #spacer {
     width: 1fr;
     height: auto;
@@ -1189,6 +1198,39 @@ ContextProgress {
 }
 
 .plan-options-help {
+    height: auto;
+    color: ansi_bright_black;
+}
+
+/* ── Mode Picker ── */
+
+#modepicker-content {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+}
+
+.mode-picker-title {
+    height: auto;
+    text-style: bold;
+    color: ansi_yellow;
+}
+
+.mode-option {
+    height: auto;
+    color: ansi_default;
+}
+
+.mode-option-selected {
+    color: ansi_green;
+    text-style: bold;
+}
+
+.mode-option-dim {
+    color: ansi_bright_black;
+}
+
+.mode-picker-help {
     height: auto;
     color: ansi_bright_black;
 }
