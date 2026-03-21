@@ -9,6 +9,7 @@ import tomli_w
 
 from vibe import __version__
 from vibe.cli.textual_ui.app import run_textual_ui
+from vibe.cli.inline_ui import run_inline_ui
 from vibe.core.agent_loop import AgentLoop
 from vibe.core.agents.models import BuiltinAgentName
 from vibe.core.config import (
@@ -204,11 +205,18 @@ def run_cli(args: argparse.Namespace) -> None:
             if loaded_session:
                 _resume_previous_session(agent_loop, *loaded_session)
 
-            run_textual_ui(
-                agent_loop=agent_loop,
-                initial_prompt=args.initial_prompt or stdin_prompt,
-                teleport_on_start=args.teleport,
-            )
+            if getattr(args, "tui", False):
+                run_textual_ui(
+                    agent_loop=agent_loop,
+                    initial_prompt=args.initial_prompt or stdin_prompt,
+                    teleport_on_start=args.teleport,
+                )
+            else:
+                run_inline_ui(
+                    agent_loop=agent_loop,
+                    initial_prompt=args.initial_prompt or stdin_prompt,
+                    teleport_on_start=args.teleport,
+                )
 
     except (KeyboardInterrupt, EOFError):
         rprint("\n[dim]Bye![/]")

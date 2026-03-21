@@ -87,6 +87,13 @@ def parse_arguments() -> argparse.Namespace:
     # Feature flag for teleport, not exposed to the user yet
     parser.add_argument("--teleport", action="store_true", help=argparse.SUPPRESS)
 
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        default=False,
+        help="Use the fullscreen Textual TUI instead of the default inline UI",
+    )
+
     continuation_group = parser.add_mutually_exclusive_group()
     continuation_group.add_argument(
         "-c",
