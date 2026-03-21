@@ -1,142 +1,128 @@
-# python312.rule
-# Rule for enforcing modern Python 3.12+ best practices.
-# Applies to all Python files (*.py) in the project.
-#
-# Guidelines covered:
-# - Use match-case syntax instead of if/elif/else for pattern matching.
-# - Use the walrus operator (:=) when it simplifies assignments and tests.
-# - Favor a "never nester" approach by avoiding deep nesting with early returns or guard clauses.
-# - Employ modern type hints using built-in generics (list, dict) and the union pipe (|) operator,
-#   rather than deprecated types from the typing module (e.g., Optional, Union, Dict, List).
-# - Ensure code adheres to strong static typing practices compatible with static analyzers like pyright.
-# - Favor pathlib.Path methods for file system operations over older os.path functions.
-# - Write code in a declarative and minimalist style that clearly expresses its intent.
-# - Additional best practices including f-string formatting, comprehensions, context managers, and overall PEP 8 compliance.
+- To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
+- ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
+- The default branch in this repo is `dev`.
+- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
+- Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
-description: "Modern Python 3.12+ best practices and style guidelines for coding."
-files: "**/*.py"
+## Style Guide
 
-guidelines:
-  - title: "Match-Case Syntax"
-    description: >
-      Prefer using the match-case construct over traditional if/elif/else chains when pattern matching
-      is applicable. This leads to clearer, more concise, and more maintainable code.
+### General Principles
 
-  - title: "Walrus Operator"
-    description: >
-      Utilize the walrus operator (:=) to streamline code where assignment and conditional testing can be combined.
-      Use it judiciously when it improves readability and reduces redundancy.
+- Keep things in one function unless composable or reusable
+- Avoid `try`/`catch` where possible
+- Avoid using the `any` type
+- Prefer single word variable names where possible
+- Use Bun APIs when possible, like `Bun.file()`
+- Rely on type inference when possible; avoid explicit type annotations or interfaces unless necessary for exports or clarity
+- Prefer functional array methods (flatMap, filter, map) over for loops; use type guards on filter to maintain type inference downstream
 
-  - title: "Never Nester"
-    description: >
-      Aim to keep code flat by avoiding deep nesting. Use early returns, guard clauses, and refactoring to
-      minimize nested structures, making your code more readable and maintainable.
+### Naming
 
-  - title: "Modern Type Hints"
-    description: >
-      Adopt modern type hinting by using built-in generics like list and dict, along with the pipe (|) operator
-      for union types (e.g., int | None). Avoid older, deprecated constructs such as Optional, Union, Dict, and List
-      from the typing module.
+Prefer single word names for variables and functions. Only use multiple words if necessary.
 
-  - title: "Strong Static Typing"
-    description: >
-      Write code with explicit and robust type annotations that are fully compatible with static type checkers
-      like pyright. This ensures higher code reliability and easier maintenance.
+### Naming Enforcement (Read This)
 
-  - title: "Pydantic-First Parsing"
-    description: >
-      Prefer Pydantic v2's native validation over ad-hoc parsing. Use `model_validate`,
-      `field_validator`, `from_attributes`, and field aliases to coerce external SDK/DTO objects.
-      Avoid manual `getattr`/`hasattr` flows and custom constructors like `from_sdk` unless they are
-      thin wrappers over `model_validate`. Keep normalization logic inside model validators so call sites
-      remain declarative and typed.
+THIS RULE IS MANDATORY FOR AGENT WRITTEN CODE.
 
-  - title: "Pathlib for File Operations"
-    description: >
-      Favor the use of pathlib.Path methods for file system operations. This approach offers a more
-      readable, object-oriented way to handle file paths and enhances cross-platform compatibility,
-      reducing reliance on legacy os.path functions.
+- Use single word names by default for new locals, params, and helper functions.
+- Multi-word names are allowed only when a single word would be unclear or ambiguous.
+- Do not introduce new camelCase compounds when a short single-word alternative is clear.
+- Before finishing edits, review touched lines and shorten newly introduced identifiers where possible.
+- Good short names to prefer: `pid`, `cfg`, `err`, `opts`, `dir`, `root`, `child`, `state`, `timeout`.
+- Examples to avoid unless truly required: `inputPID`, `existingClient`, `connectTimeout`, `workerPath`.
 
-  - title: "Declarative and Minimalist Code"
-    description: >
-      Write code that is declarative—clearly expressing its intentions rather than focusing on implementation details.
-      Strive to keep your code minimalist by removing unnecessary complexity and boilerplate. This approach improves
-      readability, maintainability, and aligns with modern Python practices.
+```ts
+// Good
+const foo = 1
+function journal(dir: string) {}
 
-  - title: "Additional Best Practices"
-    description: >
-      Embrace other modern Python idioms such as:
-      - Using f-strings for string formatting.
-      - Favoring comprehensions for building lists and dictionaries.
-      - Employing context managers (with statements) for resource management.
-      - Following PEP 8 guidelines to maintain overall code style consistency.
+// Bad
+const fooBar = 1
+function prepareJournal(dir: string) {}
+```
 
-  - title: "Exception Documentation"
-    description: >
-      Document exceptions accurately and minimally in docstrings:
-      - Only document exceptions that are explicitly raised in the function implementation
-      - Remove Raises entries for exceptions that are not directly raised
-      - Include all possible exceptions from explicit raise statements
-      - For public APIs, document exceptions from called functions if they are allowed to propagate
-      - Avoid documenting built-in exceptions that are obvious (like TypeError from type hints)
-      This ensures documentation stays accurate and maintainable, avoiding the common pitfall
-      of listing every possible exception that could theoretically occur.
+Reduce total variable count by inlining when a value is only used once.
 
-  - title: "Modern Enum Usage"
-    description: >
-      Leverage Python's enum module effectively following modern practices:
-      - Use StrEnum for string-based enums that need string comparison
-      - Use IntEnum/IntFlag for performance-critical integer-based enums
-      - Use auto() for automatic value assignment to maintain clean code
-      - Always use UPPERCASE for enum members to avoid name clashes
-      - Add methods to enums when behavior needs to be associated with values
-      - Use @property for computed attributes rather than storing values
-      - For type mixing, ensure mix-in types appear before Enum in base class sequence
-      - Consider Flag/IntFlag for bit field operations
-      - Use _generate_next_value_ for custom value generation
-      - Implement __bool__ when enum boolean evaluation should depend on value
-      This promotes type-safe constants, self-documenting code, and maintainable value sets.
+```ts
+// Good
+const journal = await Bun.file(path.join(dir, "journal.json")).json()
 
-  - title: "No Inline Ignores"
-    description: >
-      Do not use inline suppressions like `# type: ignore[...]` or `# noqa[...]` in production code.
-      Instead, fix types and lint warnings at the source by:
-      - Refining signatures with generics (TypeVar), Protocols, or precise return types
-      - Guarding with `isinstance` checks before attribute access
-      - Using `typing.cast` when control flow guarantees the type
-      - Extracting small helpers to create clearer, typed boundaries
-      If a suppression is truly unavoidable at an external boundary, prefer a narrow, well-typed wrapper
-      over in-line ignores, and document the rationale in code comments.
+// Bad
+const journalPath = path.join(dir, "journal.json")
+const journal = await Bun.file(journalPath).json()
+```
 
-  - title: "Pydantic Discriminated Unions"
-    description: >
-      When modeling variants with a discriminated union (e.g., on a `transport` field), do not narrow a
-      field type in a subclass (e.g., overriding `transport: Literal['http']` with `Literal['streamable-http']`).
-      This violates Liskov substitution and triggers type checker errors due to invariance of class attributes.
-      Prefer sibling classes plus a shared mixin for common fields and helpers, and compose the union with
-      `Annotated[Union[...], Field(discriminator='transport')]`.
-      Example pattern:
-      - Create a base with shared non-discriminator fields (e.g., `_MCPBase`).
-      - Create a mixin with protocol-specific fields/methods (e.g., `_MCPHttpFields`), without a `transport`.
-      - Define sibling final classes per variant (e.g., `MCPHttp`, `MCPStreamableHttp`, `MCPStdio`) that set
-        `transport: Literal[...]` once in each final class.
-      - Use `match` on the discriminator to narrow types at call sites.
+### Destructuring
 
-  - title: "Use uv for All Commands"
-    description: >
-      We use uv to manage our python environment. You should nevery try to run a bare python commands.
-      Always run commands using `uv` instead of invoking `python` or `pip` directly.
-      For example, use `uv add package` and `uv run script.py` rather than `pip install package` or `python script.py`.
-      This practice helps avoid environment drift and leverages modern Python packaging best practices.
-      Useful uv commands are:
-      - uv add/remove <package> to manage dependencies
-      - uv sync to install dependencies declared in pyproject.toml and uv.lock
-      - uv run script.py to run a script within the uv environment
-      - uv run pytest (or any other python tool) to run the tool within the uv environment
+Avoid unnecessary destructuring. Use dot notation to preserve context.
 
-  - title: "Imports in Cursor (no Pylance)"
-    description: >
-      Cursor's built-in Pyright does not offer the "Add import" quick fix (Ctrl+.). To add a missing import:
-      - Use the workspace snippets: type the prefix (e.g. acpschema, acphelpers, vibetypes, vibeconfig) and accept the suggestion to insert the import line, then change the symbol name.
-      - Or ask Cursor: select the undefined symbol, then Cmd+K and request "Add the missing import for <symbol>".
-      - Or copy the import from an existing file in the repo (e.g. acp.schema, acp.helpers, vibe.core.*).
+```ts
+// Good
+obj.a
+obj.b
+
+// Bad
+const { a, b } = obj
+```
+
+### Variables
+
+Prefer `const` over `let`. Use ternaries or early returns instead of reassignment.
+
+```ts
+// Good
+const foo = condition ? 1 : 2
+
+// Bad
+let foo
+if (condition) foo = 1
+else foo = 2
+```
+
+### Control Flow
+
+Avoid `else` statements. Prefer early returns.
+
+```ts
+// Good
+function foo() {
+  if (condition) return 1
+  return 2
+}
+
+// Bad
+function foo() {
+  if (condition) return 1
+  else return 2
+}
+```
+
+### Schema Definitions (Drizzle)
+
+Use snake_case for field names so column names don't need to be redefined as strings.
+
+```ts
+// Good
+const table = sqliteTable("session", {
+  id: text().primaryKey(),
+  project_id: text().notNull(),
+  created_at: integer().notNull(),
+})
+
+// Bad
+const table = sqliteTable("session", {
+  id: text("id").primaryKey(),
+  projectID: text("project_id").notNull(),
+  createdAt: integer("created_at").notNull(),
+})
+```
+
+## Testing
+
+- Avoid mocks as much as possible
+- Test actual implementation, do not duplicate logic into tests
+- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/opencode`.
+
+## Type Checking
+
+- Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.

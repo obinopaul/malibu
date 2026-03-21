@@ -1,185 +1,311 @@
-# Contributing to Mistral Vibe
+# Contributing to OpenCode
 
-Thank you for your interest in Mistral Vibe! We appreciate your enthusiasm and support.
+We want to make it easy for you to contribute to OpenCode. Here are the most common type of changes that get merged:
 
-## Current Status
+- Bug fixes
+- Additional LSPs / Formatters
+- Improvements to LLM performance
+- Support for new providers
+- Fixes for environment-specific quirks
+- Missing standard behavior
+- Documentation improvements
 
-**Mistral Vibe is in active development** — our team is iterating quickly and making lots of changes under the hood. Because of this pace, we may be slower than usual when reviewing PRs and issues.
+However, any UI or core product feature must go through a design review with the core team before implementation.
 
-**We especially encourage**:
+If you are unsure if a PR would be accepted, feel free to ask a maintainer or look for issues with any of the following labels:
 
-- **Bug reports** – Help us uncover and squash issues
-- **Feedback & ideas** – Tell us what works, what doesn't, and what could be even better
-- **Documentation improvements** – Suggest clarity improvements or highlight missing pieces
+- [`help wanted`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3Ahelp-wanted)
+- [`good first issue`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)
+- [`bug`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug)
+- [`perf`](https://github.com/anomalyco/opencode/issues?q=is%3Aopen%20is%3Aissue%20label%3A%22perf%22)
 
-## How to Provide Feedback
+> [!NOTE]
+> PRs that ignore these guardrails will likely be closed.
 
-### Bug Reports
+Want to take on an issue? Leave a comment and a maintainer may assign it to you unless it is something we are already working on.
 
-If you encounter a bug, please open an issue with the following information:
+## Adding New Providers
 
-1. **Description**: A clear description of the bug
-2. **Steps to Reproduce**: Detailed steps to reproduce the issue
-3. **Expected Behavior**: What you expected to happen
-4. **Actual Behavior**: What actually happened
-5. **Environment**:
-   - Python version
-   - Operating system
-   - Vibe version
-6. **Error Messages**: Any error messages or stack traces
-7. **Configuration**: Relevant parts of your `config.toml` (redact any sensitive information)
+New providers shouldn't require many if ANY code changes, but if you want to add support for a new provider first make a PR to:
+https://github.com/anomalyco/models.dev
 
-### Feature Requests and Feedback
+## Developing OpenCode
 
-We'd love to hear your ideas! When submitting feedback or feature request discussions:
+- Requirements: Bun 1.3+
+- Install dependencies and start the dev server from the repo root:
 
-1. **Avoid duplicates**: Check opened discussions before creating a new one
-2. **Clear Description**: Explain what you'd like to see or improve
-3. **Use Case**: Describe your use case and why this would be valuable
-4. **Alternatives**: If applicable, mention any alternatives you've considered
+  ```bash
+  bun install
+  bun dev
+  ```
 
-## Development Setup
+### Running against a different directory
 
-This section is for developers who want to set up the repository for local development, even though we're not currently accepting contributions.
-
-### Prerequisites
-
-- Python 3.12 or higher
-- [uv](https://github.com/astral-sh/uv) - Modern Python package manager
-
-### Setup
-
-1. Clone the repository:
-
-   ```bash
-   git clone <repository-url>
-   cd mistral-vibe
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   uv sync --all-extras
-   ```
-
-   This will install both runtime and development dependencies.
-
-3. (Optional) Install pre-commit hooks:
-
-   ```bash
-   uv run pre-commit install
-   ```
-
-   Pre-commit hooks will automatically run checks before each commit.
-
-### Logging Configuration
-
-Logs are written to `~/.vibe/logs/vibe.log` by default. Control logging via environment variables:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) | `WARNING` |
-| `LOG_MAX_BYTES` | Max log file size in bytes before rotation | `10485760` (10 MB) |
-| `DEBUG_MODE` | When `true`, forces `DEBUG` level | - |
-
-Example:
+By default, `bun dev` runs OpenCode in the `packages/opencode` directory. To run it against a different directory or repository:
 
 ```bash
-LOG_LEVEL=DEBUG uv run vibe
+bun dev <directory>
 ```
 
-### Running Tests
-
-Run all tests:
+To run OpenCode in the root of the opencode repo itself:
 
 ```bash
-uv run pytest
+bun dev .
 ```
 
-Run tests with verbose output:
+### Building a "localcode"
+
+To compile a standalone executable:
 
 ```bash
-uv run pytest -v
+./packages/opencode/script/build.ts --single
 ```
 
-Run a specific test file:
+Then run it with:
 
 ```bash
-uv run pytest tests/test_agent_tool_call.py
+./packages/opencode/dist/opencode-<platform>/bin/opencode
 ```
 
-### Linting and Type Checking
+Replace `<platform>` with your platform (e.g., `darwin-arm64`, `linux-x64`).
 
-#### Ruff (Linting and Formatting)
+- Core pieces:
+  - `packages/opencode`: OpenCode core business logic & server.
+  - `packages/opencode/src/cli/cmd/tui/`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
+  - `packages/app`: The shared web UI components, written in SolidJS
+  - `packages/desktop`: The native desktop app, built with Tauri (wraps `packages/app`)
+  - `packages/plugin`: Source for `@opencode-ai/plugin`
 
-Check for linting issues (without fixing):
+### Understanding bun dev vs opencode
+
+During development, `bun dev` is the local equivalent of the built `opencode` command. Both run the same CLI interface:
 
 ```bash
-uv run ruff check .
+# Development (from project root)
+bun dev --help           # Show all available commands
+bun dev serve            # Start headless API server
+bun dev web              # Start server + open web interface
+bun dev <directory>      # Start TUI in specific directory
+
+# Production
+opencode --help          # Show all available commands
+opencode serve           # Start headless API server
+opencode web             # Start server + open web interface
+opencode <directory>     # Start TUI in specific directory
 ```
 
-Auto-fix linting issues:
+### Running the API Server
+
+To start the OpenCode headless API server:
 
 ```bash
-uv run ruff check --fix .
+bun dev serve
 ```
 
-Format code:
+This starts the headless server on port 4096 by default. You can specify a different port:
 
 ```bash
-uv run ruff format .
+bun dev serve --port 8080
 ```
 
-Check formatting without modifying files (useful for CI):
+### Running the Web App
+
+To test UI changes during development:
+
+1. **First, start the OpenCode server** (see [Running the API Server](#running-the-api-server) section above)
+2. **Then run the web app:**
 
 ```bash
-uv run ruff format --check .
+bun run --cwd packages/app dev
 ```
 
-#### Pyright (Type Checking)
+This starts a local dev server at http://localhost:5173 (or similar port shown in output). Most UI changes can be tested here, but the server must be running for full functionality.
 
-Run type checking:
+### Running the Desktop App
+
+The desktop app is a native Tauri application that wraps the web UI.
+
+To run the native desktop app:
 
 ```bash
-uv run pyright
+bun run --cwd packages/desktop tauri dev
 ```
 
-#### Pre-commit Hooks
+This starts the web dev server on http://localhost:1420 and opens the native window.
 
-Run all pre-commit hooks manually:
+If you only want the web dev server (no native shell):
 
 ```bash
-uv run pre-commit run --all-files
+bun run --cwd packages/desktop dev
 ```
 
-The pre-commit hooks include:
+To create a production `dist/` and build the native app bundle:
 
-- Ruff (linting and formatting)
-- Pyright (type checking)
-- Typos (spell checking)
-- YAML/TOML validation
-- Action validator (for GitHub Actions)
+```bash
+bun run --cwd packages/desktop tauri build
+```
 
-### Code Style
+This runs `bun run --cwd packages/desktop build` automatically via Tauri’s `beforeBuildCommand`.
 
-- **Line length**: 88 characters (Black-compatible)
-- **Type hints**: Required for all functions and methods
-- **Docstrings**: Follow Google-style docstrings
-- **Formatting**: Use Ruff for both linting and formatting
-- **Type checking**: Use Pyright (configured in `pyproject.toml`)
+> [!NOTE]
+> Running the desktop app requires additional Tauri dependencies (Rust toolchain, platform-specific libraries). See the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for setup instructions.
 
-See `pyproject.toml` for detailed configuration of Ruff and Pyright.
+> [!NOTE]
+> If you make changes to the API or SDK (e.g. `packages/opencode/src/server/server.ts`), run `./script/generate.ts` to regenerate the SDK and related files.
 
-## Code Contributions
+Please try to follow the [style guide](./AGENTS.md)
 
-While we're not accepting code contributions at the moment, we may open up contributions in the future. When that happens, we'll update this document with:
+### Setting up a Debugger
 
-- Pull request process
-- Contribution guidelines
-- Review process
+Bun debugging is currently rough around the edges. We hope this guide helps you get set up and avoid some pain points.
 
-## Questions?
+The most reliable way to debug OpenCode is to run it manually in a terminal via `bun run --inspect=<url> dev ...` and attach
+your debugger via that URL. Other methods can result in breakpoints being mapped incorrectly, at least in VSCode (YMMV).
 
-If you have questions about using Mistral Vibe, please check the [README](README.md) first. For other inquiries, feel free to open a discussion or issue.
+Caveats:
 
-Thank you for helping make Mistral Vibe better! 🙏
+- If you want to run the OpenCode TUI and have breakpoints triggered in the server code, you might need to run `bun dev spawn` instead of
+  the usual `bun dev`. This is because `bun dev` runs the server in a worker thread and breakpoints might not work there.
+- If `spawn` does not work for you, you can debug the server separately:
+  - Debug server: `bun run --inspect=ws://localhost:6499/ --cwd packages/opencode ./src/index.ts serve --port 4096`,
+    then attach TUI with `opencode attach http://localhost:4096`
+  - Debug TUI: `bun run --inspect=ws://localhost:6499/ --cwd packages/opencode --conditions=browser ./src/index.ts`
+
+Other tips and tricks:
+
+- You might want to use `--inspect-wait` or `--inspect-brk` instead of `--inspect`, depending on your workflow
+- Specifying `--inspect=ws://localhost:6499/` on every invocation can be tiresome, you may want to `export BUN_OPTIONS=--inspect=ws://localhost:6499/` instead
+
+#### VSCode Setup
+
+If you use VSCode, you can use our example configurations [.vscode/settings.example.json](.vscode/settings.example.json) and [.vscode/launch.example.json](.vscode/launch.example.json).
+
+Some debug methods that can be problematic:
+
+- Debug configurations with `"request": "launch"` can have breakpoints incorrectly mapped and thus unusable
+- The same problem arises when running OpenCode in the VSCode `JavaScript Debug Terminal`
+
+With that said, you may want to try these methods, as they might work for you.
+
+## Pull Request Expectations
+
+### Issue First Policy
+
+**All PRs must reference an existing issue.** Before opening a PR, open an issue describing the bug or feature. This helps maintainers triage and prevents duplicate work. PRs without a linked issue may be closed without review.
+
+- Use `Fixes #123` or `Closes #123` in your PR description to link the issue
+- For small fixes, a brief issue is fine - just enough context for maintainers to understand the problem
+
+### General Requirements
+
+- Keep pull requests small and focused
+- Explain the issue and why your change fixes it
+- Before adding new functionality, ensure it doesn't already exist elsewhere in the codebase
+
+### UI Changes
+
+If your PR includes UI changes, please include screenshots or videos showing the before and after. This helps maintainers review faster and gives you quicker feedback.
+
+### Logic Changes
+
+For non-UI changes (bug fixes, new features, refactors), explain **how you verified it works**:
+
+- What did you test?
+- How can a reviewer reproduce/confirm the fix?
+
+### No AI-Generated Walls of Text
+
+Long, AI-generated PR descriptions and issues are not acceptable and may be ignored. Respect the maintainers' time:
+
+- Write short, focused descriptions
+- Explain what changed and why in your own words
+- If you can't explain it briefly, your PR might be too large
+
+### PR Titles
+
+PR titles should follow conventional commit standards:
+
+- `feat:` new feature or functionality
+- `fix:` bug fix
+- `docs:` documentation or README changes
+- `chore:` maintenance tasks, dependency updates, etc.
+- `refactor:` code refactoring without changing behavior
+- `test:` adding or updating tests
+
+You can optionally include a scope to indicate which package is affected:
+
+- `feat(app):` feature in the app package
+- `fix(desktop):` bug fix in the desktop package
+- `chore(opencode):` maintenance in the opencode package
+
+Examples:
+
+- `docs: update contributing guidelines`
+- `fix: resolve crash on startup`
+- `feat: add dark mode support`
+- `feat(app): add dark mode support`
+- `fix(desktop): resolve crash on startup`
+- `chore: bump dependency versions`
+
+### Style Preferences
+
+These are not strictly enforced, they are just general guidelines:
+
+- **Functions:** Keep logic within a single function unless breaking it out adds clear reuse or composition benefits.
+- **Destructuring:** Do not do unnecessary destructuring of variables.
+- **Control flow:** Avoid `else` statements.
+- **Error handling:** Prefer `.catch(...)` instead of `try`/`catch` when possible.
+- **Types:** Reach for precise types and avoid `any`.
+- **Variables:** Stick to immutable patterns and avoid `let`.
+- **Naming:** Choose concise single-word identifiers when they remain descriptive.
+- **Runtime APIs:** Use Bun helpers such as `Bun.file()` when they fit the use case.
+
+## Feature Requests
+
+For net-new functionality, start with a design conversation. Open an issue describing the problem, your proposed approach (optional), and why it belongs in OpenCode. The core team will help decide whether it should move forward; please wait for that approval instead of opening a feature PR directly.
+
+## Trust & Vouch System
+
+This project uses [vouch](https://github.com/mitchellh/vouch) to manage contributor trust. The vouch list is maintained in [`.github/VOUCHED.td`](.github/VOUCHED.td).
+
+### How it works
+
+- **Vouched users** are explicitly trusted contributors.
+- **Denounced users** are explicitly blocked. Issues and pull requests from denounced users are automatically closed. If you have been denounced, you can request to be unvouched by reaching out to a maintainer on [Discord](https://opencode.ai/discord)
+- **Everyone else** can participate normally — you don't need to be vouched to open issues or PRs.
+
+### For maintainers
+
+Collaborators with write access can manage the vouch list by commenting on any issue:
+
+- `vouch` — vouch for the issue author
+- `vouch @username` — vouch for a specific user
+- `denounce` — denounce the issue author
+- `denounce @username` — denounce a specific user
+- `denounce @username <reason>` — denounce with a reason
+- `unvouch` / `unvouch @username` — remove someone from the list
+
+Changes are committed automatically to `.github/VOUCHED.td`.
+
+### Denouncement policy
+
+Denouncement is reserved for users who repeatedly submit low-quality AI-generated contributions, spam, or otherwise act in bad faith. It is not used for disagreements or honest mistakes.
+
+## Issue Requirements
+
+All issues **must** use one of our issue templates:
+
+- **Bug report** — for reporting bugs (requires a description)
+- **Feature request** — for suggesting enhancements (requires verification checkbox and description)
+- **Question** — for asking questions (requires the question)
+
+Blank issues are not allowed. When a new issue is opened, an automated check verifies that it follows a template and meets our contributing guidelines. If an issue doesn't meet the requirements, you'll receive a comment explaining what needs to be fixed and have **2 hours** to edit the issue. After that, it will be automatically closed.
+
+Issues may be flagged for:
+
+- Not using a template
+- Required fields left empty or filled with placeholder text
+- AI-generated walls of text
+- Missing meaningful content
+
+If you believe your issue was incorrectly flagged, let a maintainer know.

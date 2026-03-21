@@ -1,667 +1,141 @@
-# Malibu
+<p align="center">
+  <a href="https://opencode.ai">
+    <picture>
+      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
+      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
+      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
+    </picture>
+  </a>
+</p>
+<p align="center">The open source AI coding agent.</p>
+<p align="center">
+  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
+  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
+  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh.md">简体中文</a> |
+  <a href="README.zht.md">繁體中文</a> |
+  <a href="README.ko.md">한국어</a> |
+  <a href="README.de.md">Deutsch</a> |
+  <a href="README.es.md">Español</a> |
+  <a href="README.fr.md">Français</a> |
+  <a href="README.it.md">Italiano</a> |
+  <a href="README.da.md">Dansk</a> |
+  <a href="README.ja.md">日本語</a> |
+  <a href="README.pl.md">Polski</a> |
+  <a href="README.ru.md">Русский</a> |
+  <a href="README.bs.md">Bosanski</a> |
+  <a href="README.ar.md">العربية</a> |
+  <a href="README.no.md">Norsk</a> |
+  <a href="README.br.md">Português (Brasil)</a> |
+  <a href="README.th.md">ไทย</a> |
+  <a href="README.tr.md">Türkçe</a> |
+  <a href="README.uk.md">Українська</a> |
+  <a href="README.bn.md">বাংলা</a> |
+  <a href="README.gr.md">Ελληνικά</a> |
+  <a href="README.vi.md">Tiếng Việt</a>
+</p>
+
+[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
 
-[![PyPI Version](https://img.shields.io/pypi/v/mistral-vibe)](https://pypi.org/project/mistral-vibe)
-[![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/release/python-3120/)
-[![CI Status](https://github.com/mistralai/mistral-vibe/actions/workflows/ci.yml/badge.svg)](https://github.com/mistralai/mistral-vibe/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/mistralai/mistral-vibe)](https://github.com/mistralai/mistral-vibe/blob/main/LICENSE)
-
-```
-██████████████████░░
-██████████████████░░
-████  ██████  ████░░
-████    ██    ████░░
-████          ████░░
-████  ██  ██  ████░░
-██      ██      ██░░
-██████████████████░░
-██████████████████░░
-```
-
-**An open-source CLI coding assistant.**
-
-Malibu is a command-line coding assistant with DeepAgent-style orchestration, provider-configurable models, and a conversational interface to your codebase. It lets you explore, modify, and interact with projects through a powerful set of tools while keeping the existing CLI, session, and ACP surfaces intact.
-
-> [!WARNING]
-> Malibu works on Windows, but we officially support and target UNIX environments.
-
-### One-line install (recommended)
-
-**Linux and macOS**
-
-```bash
-curl -LsSf https://mistral.ai/vibe/install.sh | bash
-```
-
-**Windows**
-
-First, install uv
-```bash
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Then, use uv command below.
-
-### Using uv
-
-```bash
-uv tool install malibu
-```
-
-### Using pip
-
-```bash
-pip install malibu
-```
-
-## Table of Contents
-
-- [Malibu](#malibu)
-    - [One-line install (recommended)](#one-line-install-recommended)
-    - [Using uv](#using-uv)
-    - [Using pip](#using-pip)
-  - [Table of Contents](#table-of-contents)
-  - [Features](#features)
-    - [Built-in Agents](#built-in-agents)
-    - [Subagents and Task Delegation](#subagents-and-task-delegation)
-    - [Interactive User Questions](#interactive-user-questions)
-  - [Terminal Requirements](#terminal-requirements)
-  - [Quick Start](#quick-start)
-  - [Usage](#usage)
-    - [Interactive Mode](#interactive-mode)
-    - [Trust Folder System](#trust-folder-system)
-    - [Programmatic Mode](#programmatic-mode)
-      - [Programmatic Mode Options](#programmatic-mode-options)
-  - [Slash Commands](#slash-commands)
-    - [Built-in Slash Commands](#built-in-slash-commands)
-    - [Custom Slash Commands via Skills](#custom-slash-commands-via-skills)
-  - [Skills System](#skills-system)
-    - [Creating Skills](#creating-skills)
-    - [Skill Discovery](#skill-discovery)
-    - [Runtime Integration](#runtime-integration)
-    - [Managing Skills](#managing-skills)
-  - [Configuration](#configuration)
-    - [Configuration File Location](#configuration-file-location)
-    - [API Key Configuration](#api-key-configuration)
-    - [Custom System Prompts](#custom-system-prompts)
-    - [Custom Agent Configurations](#custom-agent-configurations)
-    - [Tool Management](#tool-management)
-      - [Enable/Disable Tools with Patterns](#enabledisable-tools-with-patterns)
-    - [MCP Server Configuration](#mcp-server-configuration)
-    - [Session Management](#session-management)
-      - [Session Continuation and Resumption](#session-continuation-and-resumption)
-      - [Working Directory Control](#working-directory-control)
-    - [Update Settings](#update-settings)
-      - [Auto-Update](#auto-update)
-    - [Notification Settings](#notification-settings)
-    - [Custom Malibu Home Directory](#custom-malibu-home-directory)
-  - [Editors/IDEs](#editorsides)
-  - [Resources](#resources)
-  - [Data collection \& usage](#data-collection--usage)
-  - [License](#license)
-
-## Features
-
-- **Interactive Chat**: A conversational AI agent that understands your requests and breaks down complex tasks.
-- **Powerful Toolset**: A suite of tools for file manipulation, code searching, version control, and command execution, right from the chat prompt.
-  - Read, write, and patch files (`read_file`, `write_file`, `search_replace`).
-  - Execute shell commands in a stateful terminal (`bash`).
-  - Recursively search code with `grep` (with `ripgrep` support).
-  - Manage a `todo` list to track the agent's work.
-  - Ask interactive questions to gather user input (`ask_user_question`).
-  - Delegate tasks to subagents for parallel work (`task`).
-- **Project-Aware Context**: Vibe automatically scans your project's file structure and Git status to provide relevant context to the agent, improving its understanding of your codebase.
-- **Advanced CLI Experience**: Built with modern libraries for a smooth and efficient workflow.
-  - Autocompletion for slash commands (`/`) and file paths (`@`).
-  - Persistent command history.
-  - Beautiful Themes.
-- **Highly Configurable**: Customize models, providers, tool permissions, and UI preferences through a simple `config.toml` file.
-- **Safety First**: Features tool execution approval.
-- **Multiple Built-in Agents**: Choose from different agent profiles tailored for specific workflows.
-
-### Built-in Agents
-
-Vibe comes with several built-in agent profiles, each designed for different use cases:
-
-- **`default`**: Standard agent that requires approval for tool executions. Best for general use.
-- **`plan`**: Read-only agent for exploration and planning. Auto-approves safe tools like `grep` and `read_file`.
-- **`accept-edits`**: Auto-approves file edits only (`write_file`, `search_replace`). Useful for code refactoring.
-- **`auto-approve`**: Auto-approves all tool executions. Use with caution.
-
-Use the `--agent` flag to select a different agent.
-
-If you run Malibu from source with uv, these are the exact commands:
-
-```bash
-uv run malibu --agent default
-uv run malibu --agent plan
-uv run malibu --agent accept-edits
-uv run malibu --agent auto-approve
-```
-
-If you installed the binary/tool, use:
-
-```bash
-malibu --agent plan
-```
-
-### Subagents and Task Delegation
-
-Vibe supports subagents for delegating tasks. Subagents run independently and can perform specialized work without user interaction, preventing the context from being overloaded.
-
-The `task` tool allows the agent to delegate work to subagents:
-
-```
-> Can you explore the codebase structure while I work on something else?
-
-🤖 I'll use the task tool to delegate this to a custom subagent.
-
-> task(task="Analyze the project structure and architecture", agent="my-subagent")
-```
-
-Create custom subagents by adding `agent_type = "subagent"` to your agent configuration.
-
-### Interactive User Questions
-
-The `ask_user_question` tool allows the agent to ask you clarifying questions during its work. This enables more interactive and collaborative workflows.
-
-```
-> Can you help me refactor this function?
-
-🤖 I need to understand your requirements better before proceeding.
-
-> ask_user_question(questions=[{
-    "question": "What's the main goal of this refactoring?",
-    "options": [
-        {"label": "Performance", "description": "Make it run faster"},
-        {"label": "Readability", "description": "Make it easier to understand"},
-        {"label": "Maintainability", "description": "Make it easier to modify"}
-    ]
-}])
-```
-
-The agent can ask multiple questions at once, displayed as tabs. Each question supports 2-4 options plus an automatic "Other" option for free text responses.
-
-## Terminal Requirements
-
-Vibe's interactive interface requires a modern terminal emulator. Recommended terminal emulators include:
-
-- **WezTerm** (cross-platform)
-- **Alacritty** (cross-platform)
-- **Ghostty** (Linux and macOS)
-- **Kitty** (Linux and macOS)
-
-Most modern terminals should work, but older or minimal terminal emulators may have display issues.
-
-## Quick Start
-
-1. Navigate to your project's root directory:
-
-   ```bash
-   cd /path/to/your/project
-   ```
-
-2. Run Malibu:
-
-   ```bash
-   malibu
-   ```
-
-3. If this is your first time running Malibu, it will:
-
-  - Create a default configuration file at `~/.malibu/config.toml`
-  - Prompt you to choose a provider and enter an API key if credentials are not already configured
-  - Save your API key to `~/.malibu/.env` for future use
-
-   Alternatively, you can configure your API key separately using `malibu --setup`.
-
-4. Start interacting with the agent!
-
-   ```
-   > Can you find all instances of the word "TODO" in the project?
-
-   🤖 The user wants to find all instances of "TODO". The `grep` tool is perfect for this. I will use it to search the current directory.
-
-   > grep(pattern="TODO", path=".")
-
-   ... (grep tool output) ...
-
-   🤖 I found the following "TODO" comments in your project.
-   ```
-
-## Usage
-
-### Interactive Mode
-
-Simply run `malibu` to enter the interactive chat loop.
-
-- **Multi-line Input**: Press `Ctrl+J` or `Shift+Enter` for select terminals to insert a newline.
-- **File Paths**: Reference files in your prompt using the `@` symbol for smart autocompletion (e.g., `> Read the file @src/agent.py`).
-- **Shell Commands**: Prefix any command with `!` to execute it directly in your shell, bypassing the agent (e.g., `> !ls -l`).
-- **External Editor**: Press `Ctrl+G` to edit your current input in an external editor.
-- **Tool Output Toggle**: Press `Ctrl+O` to toggle the tool output view.
-- **Todo View Toggle**: Press `Ctrl+T` to toggle the todo list view.
-- **Auto-Approve Toggle**: Press `Shift+Tab` to toggle auto-approve mode on/off.
-
-You can start Malibu with a prompt using the following command:
-
-```bash
-malibu "Refactor the main function in cli/main.py to be more modular."
-```
-
-**Note**: The `--auto-approve` flag automatically approves all tool executions without prompting. In interactive mode, you can also toggle auto-approve on/off using `Shift+Tab`.
-
-### Trust Folder System
-
-Malibu includes a trust folder system to ensure you only run the agent in directories you trust. When you first run Malibu in a new directory which contains a `.malibu` or `.vibe` subfolder, it may ask you to confirm whether you trust the folder.
-
-Trusted folders are remembered for future sessions. You can manage trusted folders through its configuration file `~/.malibu/trusted_folders.toml`.
-
-This safety feature helps prevent accidental execution in sensitive directories.
-
-### Programmatic Mode
-
-You can run Malibu non-interactively by piping input or using the `--prompt` flag. This is useful for scripting.
-
-```bash
-malibu --prompt "Refactor the main function in cli/main.py to be more modular."
-```
-
-By default, it uses `auto-approve` mode.
-
-#### Programmatic Mode Options
-
-When using `--prompt`, you can specify additional options:
-
-- **`--max-turns N`**: Limit the maximum number of assistant turns. The session will stop after N turns.
-- **`--max-price DOLLARS`**: Set a maximum cost limit in dollars. The session will be interrupted if the cost exceeds this limit.
-- **`--enabled-tools TOOL`**: Enable specific tools. In programmatic mode, this disables all other tools. Can be specified multiple times. Supports exact names, glob patterns (e.g., `bash*`), or regex with `re:` prefix (e.g., `re:^serena_.*$`).
-- **`--output FORMAT`**: Set the output format. Options:
-  - `text` (default): Human-readable text output
-  - `json`: All messages as JSON at the end
-  - `streaming`: Newline-delimited JSON per message
-
-Example:
-
-```bash
-vibe --prompt "Analyze the codebase" --max-turns 5 --max-price 1.0 --output json
-```
-
-## Slash Commands
-
-Use slash commands for meta-actions and configuration changes during a session.
-
-### Built-in Slash Commands
-
-Vibe provides several built-in slash commands. Use slash commands by typing them in the input box:
-
-```
-> /help
-```
-
-### Custom Slash Commands via Skills
-
-You can define your own slash commands through the skills system. Skills are reusable components that extend Vibe's functionality.
-
-To create a custom slash command:
-
-1. Create a skill directory with a `SKILL.md` file
-2. Set `user-invocable = true` in the skill metadata
-3. Define the command logic in your skill
-
-Example skill metadata:
-
-```markdown
----
-name: my-skill
-description: My custom skill with slash commands
-user-invocable: true
----
-```
-
-Custom slash commands appear in the autocompletion menu alongside built-in commands.
-
-## Skills System
-
-Vibe's skills system allows you to extend functionality through reusable components. Skills can add new tools, slash commands, and specialized behaviors.
-
-Vibe follows the [Agent Skills specification](https://agentskills.io/specification) for skill format and structure.
-
-### Creating Skills
-
-Skills are defined in directories with a `SKILL.md` file containing metadata in YAML frontmatter. For example, `~/.vibe/skills/code-review/SKILL.md`:
-
-```markdown
----
-name: code-review
-description: Perform automated code reviews
-license: MIT
-compatibility: Python 3.12+
-user-invocable: true
-allowed-tools:
-  - read_file
-  - grep
-  - ask_user_question
 ---
 
-# Code Review Skill
-
-This skill helps analyze code quality and suggest improvements.
-```
-
-### Skill Discovery
-
-Vibe discovers skills from multiple locations:
-
-1. **Custom paths**: Configured in `config.toml` via `skill_paths`
-2. **Standard Agent Skills path** (project root, trusted folders only): `.agents/skills/` — [Agent Skills](https://agentskills.io) standard
-3. **Local project skills** (project root, trusted folders only): `.vibe/skills/` in your project
-4. **Global skills directory**: `~/.vibe/skills/`
-
-```toml
-skill_paths = ["/path/to/custom/skills"]
-```
-
-### Runtime Integration
-
-Vibe intentionally separates skill discovery from agent execution:
-
-1. Vibe discovers skills from `skill_paths`, `.agents/skills/`, `.vibe/skills/`, and `~/.vibe/skills/`
-2. `DeepAgentRuntime` turns those discovered directories into mounted `SkillsMiddleware` sources
-3. LangChain `create_agent()` runs the agent loop with the selected DeepAgent middleware stack
-4. Vibe still owns model/provider transport, tool permissions, sessions, and UI event translation
-
-This keeps project skill discovery and configuration in Vibe while using DeepAgent middleware for on-demand skill loading and context management.
-
-### Managing Skills
-
-Enable or disable skills using patterns in your configuration:
-
-```toml
-# Enable specific skills
-enabled_skills = ["code-review", "test-*"]
-
-# Disable specific skills
-disabled_skills = ["experimental-*"]
-```
-
-Skills support the same pattern matching as tools (exact names, glob patterns, and regex).
-
-## Configuration
-
-### Configuration File Location
-
-Malibu is configured via a `config.toml` file. It looks for this file first in `./.malibu/config.toml`, then `./.vibe/config.toml`, and then falls back to `~/.malibu/config.toml`.
-
-### API Key Configuration
-
-Malibu supports multiple model providers. The built-in interactive setup currently includes Mistral, OpenAI, and Anthropic presets and stores their API keys in `~/.malibu/.env`.
-
-You can configure your API key using `malibu --setup`, or through one of the methods below.
-
-Malibu supports multiple ways to configure your API keys:
-
-1. **Interactive Setup (Recommended for first-time users)**: When you run Malibu for the first time or if your API key is missing, Malibu will prompt you to enter it. The key will be securely saved to `~/.malibu/.env` for future sessions.
-
-2. **Environment Variables**: Set your provider API key as an environment variable:
-
-   ```bash
-   export MISTRAL_API_KEY="your_mistral_api_key"
-   export OPENAI_API_KEY="your_openai_api_key"
-   export ANTHROPIC_API_KEY="your_anthropic_api_key"
-   ```
-
-3. **`.env` File**: Create a `.env` file in `~/.malibu/` and add your API keys:
-
-   ```bash
-   MISTRAL_API_KEY=your_mistral_api_key
-   OPENAI_API_KEY=your_openai_api_key
-   ANTHROPIC_API_KEY=your_anthropic_api_key
-   ```
-
-   Malibu automatically loads API keys from `~/.malibu/.env` on startup. Environment variables take precedence over the `.env` file if both are set.
-
-**Note**: The `.env` file is specifically for API keys and other provider credentials. General Malibu configuration should be done in `config.toml`.
-
-### Custom System Prompts
-
-You can create custom system prompts to replace the default one (`prompts/cli.md`). Create a markdown file in the `~/.malibu/prompts/` directory with your custom prompt content.
-
-To use a custom system prompt, set the `system_prompt_id` in your configuration to match the filename (without the `.md` extension):
-
-```toml
-# Use a custom system prompt
-system_prompt_id = "my_custom_prompt"
-```
-
-This will load the prompt from `~/.malibu/prompts/my_custom_prompt.md`.
-
-### Custom Agent Configurations
-
-You can create custom agent configurations for specific use cases (e.g., red-teaming, specialized tasks) by adding agent-specific TOML files in the `~/.malibu/agents/` directory.
-
-To use a custom agent, run Malibu with the `--agent` flag:
+### Installation
 
 ```bash
-malibu --agent my_custom_agent
+# YOLO
+curl -fsSL https://opencode.ai/install | bash
+
+# Package managers
+npm i -g opencode-ai@latest        # or bun/pnpm/yarn
+scoop install opencode             # Windows
+choco install opencode             # Windows
+brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
+brew install opencode              # macOS and Linux (official brew formula, updated less)
+sudo pacman -S opencode            # Arch Linux (Stable)
+paru -S opencode-bin               # Arch Linux (Latest from AUR)
+mise use -g opencode               # Any OS
+nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
 ```
 
-Malibu will look for a file named `my_custom_agent.toml` in the agents directory and apply its configuration.
+> [!TIP]
+> Remove versions older than 0.1.x before installing.
 
-Example custom agent configuration (`~/.malibu/agents/redteam.toml`):
+### Desktop App (BETA)
 
-```toml
-# Custom agent configuration for red-teaming
-active_model = "devstral-2"
-system_prompt_id = "redteam"
+OpenCode is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/opencode/releases) or [opencode.ai/download](https://opencode.ai/download).
 
-# Disable some tools for this agent
-disabled_tools = ["search_replace", "write_file"]
-
-# Override tool permissions for this agent
-[tools.bash]
-permission = "always"
-
-[tools.read_file]
-permission = "always"
-```
-
-Note: This implies that you have set up a redteam prompt named `~/.vibe/prompts/redteam.md`.
-
-### Tool Management
-
-#### Enable/Disable Tools with Patterns
-
-You can control which tools are active using `enabled_tools` and `disabled_tools`.
-These fields support exact names, glob patterns, and regular expressions.
-
-Examples:
-
-```toml
-# Only enable tools that start with "serena_" (glob)
-enabled_tools = ["serena_*"]
-
-# Regex (prefix with re:) — matches full tool name (case-insensitive)
-enabled_tools = ["re:^serena_.*$"]
-
-# Disable a group with glob; everything else stays enabled
-disabled_tools = ["mcp_*", "grep"]
-```
-
-Notes:
-
-- MCP tool names use underscores, e.g., `serena_list` not `serena.list`.
-- Regex patterns are matched against the full tool name using fullmatch.
-
-### MCP Server Configuration
-
-You can configure MCP (Model Context Protocol) servers to extend Vibe's capabilities. Add MCP server configurations under the `mcp_servers` section:
-
-```toml
-# Example MCP server configurations
-[[mcp_servers]]
-name = "my_http_server"
-transport = "http"
-url = "http://localhost:8000"
-headers = { "Authorization" = "Bearer my_token" }
-api_key_env = "MY_API_KEY_ENV_VAR"
-api_key_header = "Authorization"
-api_key_format = "Bearer {token}"
-
-[[mcp_servers]]
-name = "my_streamable_server"
-transport = "streamable-http"
-url = "http://localhost:8001"
-headers = { "X-API-Key" = "my_api_key" }
-
-[[mcp_servers]]
-name = "fetch_server"
-transport = "stdio"
-command = "uvx"
-args = ["mcp-server-fetch"]
-env = { "DEBUG" = "1", "LOG_LEVEL" = "info" }
-```
-
-Supported transports:
-
-- `http`: Standard HTTP transport
-- `streamable-http`: HTTP transport with streaming support
-- `stdio`: Standard input/output transport (for local processes)
-
-Key fields:
-
-- `name`: A short alias for the server (used in tool names)
-- `transport`: The transport type
-- `url`: Base URL for HTTP transports
-- `headers`: Additional HTTP headers
-- `api_key_env`: Environment variable containing the API key
-- `command`: Command to run for stdio transport
-- `args`: Additional arguments for stdio transport
-- `startup_timeout_sec`: Timeout in seconds for the server to start and initialize (default 10s)
-- `tool_timeout_sec`: Timeout in seconds for tool execution (default 60s)
-- `env`: Environment variables to set for the MCP server of transport type stdio
-
-MCP tools are named using the pattern `{server_name}_{tool_name}` and can be configured with permissions like built-in tools:
-
-```toml
-# Configure permissions for specific MCP tools
-[tools.fetch_server_get]
-permission = "always"
-
-[tools.my_http_server_query]
-permission = "ask"
-```
-
-MCP server configurations support additional features:
-
-- **Environment variables**: Set environment variables for MCP servers
-- **Custom timeouts**: Configure startup and tool execution timeouts
-
-Example with environment variables and timeouts:
-
-```toml
-[[mcp_servers]]
-name = "my_server"
-transport = "http"
-url = "http://localhost:8000"
-env = { "DEBUG" = "1", "LOG_LEVEL" = "info" }
-startup_timeout_sec = 15
-tool_timeout_sec = 120
-```
-
-### Session Management
-
-#### Session Continuation and Resumption
-
-Vibe supports continuing from previous sessions:
-
-- **`--continue`** or **`-c`**: Continue from the most recent saved session
-- **`--resume SESSION_ID`**: Resume a specific session by ID (supports partial matching)
+| Platform              | Download                              |
+| --------------------- | ------------------------------------- |
+| macOS (Apple Silicon) | `opencode-desktop-darwin-aarch64.dmg` |
+| macOS (Intel)         | `opencode-desktop-darwin-x64.dmg`     |
+| Windows               | `opencode-desktop-windows-x64.exe`    |
+| Linux                 | `.deb`, `.rpm`, or AppImage           |
 
 ```bash
-# Continue from last session
-vibe --continue
-
-# Resume specific session
-vibe --resume abc123
+# macOS (Homebrew)
+brew install --cask opencode-desktop
+# Windows (Scoop)
+scoop bucket add extras; scoop install extras/opencode-desktop
 ```
 
-Session logging must be enabled in your configuration for these features to work.
+#### Installation Directory
 
-#### Working Directory Control
+The install script respects the following priority order for the installation path:
 
-Use the `--workdir` option to specify a working directory:
+1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
+2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
+3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
+4. `$HOME/.opencode/bin` - Default fallback
 
 ```bash
-vibe --workdir /path/to/project
+# Examples
+OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
 ```
 
-This is useful when you want to run Vibe from a different location than your current directory.
+### Agents
 
-### Update Settings
+OpenCode includes two built-in agents you can switch between with the `Tab` key.
 
-#### Auto-Update
+- **build** - Default, full-access agent for development work
+- **plan** - Read-only agent for analysis and code exploration
+  - Denies file edits by default
+  - Asks permission before running bash commands
+  - Ideal for exploring unfamiliar codebases or planning changes
 
-Vibe includes an automatic update feature that keeps your installation current. This is enabled by default.
+Also included is a **general** subagent for complex searches and multistep tasks.
+This is used internally and can be invoked using `@general` in messages.
 
-To disable auto-updates, add this to your `config.toml`:
+Learn more about [agents](https://opencode.ai/docs/agents).
 
-```toml
-enable_auto_update = false
-```
+### Documentation
 
-### Notification Settings
+For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
 
-Vibe can notify you when the agent needs your attention (awaiting approval, asking a question, or task complete). This is useful when you switch to another window while the agent works.
+### Contributing
 
-To disable notifications:
+If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
 
-```toml
-enable_notifications = false
-```
+### Building on OpenCode
 
-### Custom Malibu Home Directory
+If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
 
-By default, Malibu stores its configuration in `~/.malibu/`. You can override this by setting the `MALIBU_HOME` environment variable:
+### FAQ
 
-```bash
-export MALIBU_HOME="/path/to/custom/malibu/home"
-```
+#### How is this different from Claude Code?
 
-Malibu still accepts the legacy `VIBE_HOME` environment variable during the compatibility period.
+It's very similar to Claude Code in terms of capability. Here are the key differences:
 
-This affects where Malibu looks for:
+- 100% open source
+- Not coupled to any provider. Although we recommend the models we provide through [OpenCode Zen](https://opencode.ai/zen), OpenCode can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
+- Out-of-the-box LSP support
+- A focus on TUI. OpenCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
+- A client/server architecture. This, for example, can allow OpenCode to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.
 
-- `config.toml` - Main configuration
-- `.env` - API keys
-- `agents/` - Custom agent configurations
-- `prompts/` - Custom system prompts
-- `tools/` - Custom tools
-- `logs/` - Session logs
+---
 
-## Editors/IDEs
-
-Malibu can be used in text editors and IDEs that support [Agent Client Protocol](https://agentclientprotocol.com/overview/clients). See the [ACP Setup documentation](docs/acp-setup.md) for setup instructions for various editors and IDEs.
-
-## Resources
-
-- [CHANGELOG](CHANGELOG.md) - See what's new in each version
-- [CONTRIBUTING](CONTRIBUTING.md) - Guidelines for feature requests, feedback and bug reports
-
-## Data collection & usage
-
-Use of Malibu is subject to the applicable privacy policy for your deployment and may include the collection and processing of data related to your use of the service, such as usage data, to operate, maintain, and improve Malibu. You can disable telemetry in your `config.toml` by setting `enable_telemetry = false`.
-
-## License
-
-Copyright 2025 Malibu
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the [LICENSE](LICENSE) file for the full license text.
+**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)

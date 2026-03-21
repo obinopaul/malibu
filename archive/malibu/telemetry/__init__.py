@@ -1,1 +1,0 @@
-"""Telemetry layer — structured logging."""
