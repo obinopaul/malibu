@@ -62,4 +62,8 @@ def print_banner(
             line.append_text(info_lines[i])
         console.print(line)
 
+    # Print any remaining info lines that didn't fit alongside the art
+    for i in range(len(art_lines), len(info_lines)):
+        console.print(info_lines[i])
+
     console.print()
