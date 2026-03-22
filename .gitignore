@@ -28,3 +28,7 @@ opencode-dev
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# External / local tooling
+.claude/
+external/

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { Script } from "@opencode-ai/script"
+import { Script } from "@malibu-ai/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
 

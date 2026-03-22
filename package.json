@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "opencode",
+  "name": "malibu",
   "description": "AI-powered development tool",
   "private": true,
   "type": "module",
@@ -60,14 +60,14 @@
     "turbo": "2.8.13"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "workspace:*",
-    "@opencode-ai/script": "workspace:*",
-    "@opencode-ai/sdk": "workspace:*",
+    "@malibu-ai/plugin": "workspace:*",
+    "@malibu-ai/script": "workspace:*",
+    "@malibu-ai/sdk": "workspace:*",
     "typescript": "catalog:"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/anomalyco/opencode"
+    "url": "https://github.com/anomalyco/malibu"
   },
   "license": "MIT",
   "prettier": {
