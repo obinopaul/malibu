@@ -161,6 +161,10 @@ describe("tool.batch", () => {
         )
 
         expect(result.output).toContain("Executed 5/6 tools successfully. 1 failed.")
+        expect(result.output).toContain("<batch_failures>")
+        expect(result.output).toContain("tool: read")
+        expect(result.output).toContain("error:")
+        expect(result.output).toContain("filePath")
         expect(result.metadata.totalCalls).toBe(6)
         expect(result.metadata.successful).toBe(5)
         expect(result.metadata.failed).toBe(1)

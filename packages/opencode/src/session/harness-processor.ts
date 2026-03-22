@@ -339,7 +339,7 @@ export namespace HarnessProcessor {
         if (Object.keys(current).length > 0) return current
         return p.args ?? {}
       })()
-      const status = p.status ?? "completed"
+      const status = meta?.status ?? p.status ?? "completed"
 
       await Session.updatePart({
         ...match,

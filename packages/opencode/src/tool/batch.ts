@@ -106,8 +106,14 @@ export const BatchTool = Tool.define("batch", async () => {
             },
           })
 
-          return { success: true as const, tool: call.tool, result }
+          return {
+            success: true as const,
+            tool: call.tool,
+            args: call.parameters,
+            result,
+          }
         } catch (error) {
+          const err = error instanceof Error ? error.message : String(error)
           await Session.updatePart({
             id: partID,
             messageID: ctx.messageID,
@@ -126,7 +132,12 @@ export const BatchTool = Tool.define("batch", async () => {
             },
           })
 
-          return { success: false as const, tool: call.tool, error }
+          return {
+            success: false as const,
+            tool: call.tool,
+            args: call.parameters,
+            error: err,
+          }
         }
       }
 
@@ -153,28 +164,45 @@ export const BatchTool = Tool.define("batch", async () => {
         results.push({
           success: false as const,
           tool: call.tool,
-          error: new Error("Maximum of 25 tools allowed in batch"),
+          args: call.parameters,
+          error: "Maximum of 25 tools allowed in batch",
         })
       }
 
       const successfulCalls = results.filter((r) => r.success).length
       const failedCalls = results.length - successfulCalls
+      const errors = results.flatMap((r) => (r.success ? [] : [r]))
 
       const outputMessage =
         failedCalls > 0
-          ? `Executed ${successfulCalls}/${results.length} tools successfully. ${failedCalls} failed.`
+          ? [
+              `Executed ${successfulCalls}/${results.length} tools successfully. ${failedCalls} failed.`,
+              "",
+              "<batch_failures>",
+              ...errors.flatMap((item, idx) => [
+                `${idx + 1}. tool: ${item.tool}`,
+                `args: ${JSON.stringify(item.args)}`,
+                `error: ${item.error}`,
+                "",
+              ]),
+              "</batch_failures>",
+            ].join("\n")
           : `All ${successfulCalls} tools executed successfully.\n\nKeep using the batch tool for optimal performance in your next response!`
 
       return {
         title: `Batch execution (${successfulCalls}/${results.length} successful)`,
         output: outputMessage,
-        attachments: results.filter((result) => result.success).flatMap((r) => r.result.attachments ?? []),
+        attachments: results.flatMap((result) => (result.success ? result.result.attachments ?? [] : [])),
         metadata: {
           totalCalls: results.length,
           successful: successfulCalls,
           failed: failedCalls,
           tools: params.tool_calls.map((c) => c.tool),
-          details: results.map((r) => ({ tool: r.tool, success: r.success })),
+          details: results.map((r) =>
+            r.success
+              ? { tool: r.tool, success: r.success, args: r.args }
+              : { tool: r.tool, success: r.success, args: r.args, error: r.error },
+          ),
         },
       }
     },

@@ -1,9 +1,14 @@
 import { describe, expect, test, beforeEach } from "bun:test"
+import { ToolMessage } from "@langchain/core/messages"
+import z from "zod"
 import {
+  toLangChainTool,
   toolMetadataStore,
   metadataKey,
   clearSessionMetadata,
 } from "../../src/tool/langchain-adapter"
+import { SessionID, MessageID } from "../../src/session/schema"
+import { Tool } from "../../src/tool/tool"
 
 describe("langchain-adapter.toolMetadataStore", () => {
   beforeEach(() => {
@@ -57,5 +62,112 @@ describe("langchain-adapter.metadataKey isolation", () => {
     const k1 = metadataKey("session-a", "call-1")
     const k2 = metadataKey("session-a", "call-2")
     expect(k1).not.toBe(k2)
+  })
+})
+
+describe("langchain-adapter.tool errors", () => {
+  beforeEach(() => {
+    toolMetadataStore.clear()
+  })
+
+  function bridge() {
+    return {
+      sessionID: SessionID.make("session-1"),
+      messageID: MessageID.make("message-1"),
+      agent: "build",
+      abort: new AbortController().signal,
+      messages: [],
+    }
+  }
+
+  function text(input: unknown) {
+    if (typeof input === "string") return input
+    if (input instanceof ToolMessage) {
+      if (typeof input.content === "string") return input.content
+      return JSON.stringify(input.content)
+    }
+    return JSON.stringify(input)
+  }
+
+  test("returns a ToolMessage for validation failures", async () => {
+    const info = Tool.define("demo", {
+      description: "Demo tool",
+      parameters: z.object({
+        value: z.string(),
+      }),
+      async execute(args) {
+        return {
+          title: "Demo",
+          metadata: {},
+          output: args.value,
+        }
+      },
+    })
+
+    const tool = await toLangChainTool(info, bridge())
+    const result = await tool.invoke({
+      type: "tool_call",
+      id: "call-1",
+      name: "demo",
+      args: {},
+    } as any)
+
+    expect(result).toBeInstanceOf(ToolMessage)
+    expect(text(result)).toContain("Received tool input did not match expected schema")
+    expect(toolMetadataStore.get(metadataKey("session-1", "call-1"))?.status).toBe("error")
+  })
+
+  test("stores error status for execution failures", async () => {
+    const info = Tool.define("explode", {
+      description: "Explode tool",
+      parameters: z.object({
+        value: z.string(),
+      }),
+      async execute() {
+        throw new Error("boom")
+      },
+    })
+
+    const tool = await toLangChainTool(info, bridge())
+    const result = await tool.invoke({
+      type: "tool_call",
+      id: "call-2",
+      name: "explode",
+      args: {
+        value: "x",
+      },
+    } as any)
+
+    expect(text(result)).toContain("Error: boom")
+    expect(toolMetadataStore.get(metadataKey("session-1", "call-2"))?.status).toBe("error")
+  })
+
+  test("stores completed status for successful tool calls", async () => {
+    const info = Tool.define("ok", {
+      description: "Ok tool",
+      parameters: z.object({
+        value: z.string(),
+      }),
+      async execute(args) {
+        return {
+          title: "Ok",
+          metadata: { value: args.value },
+          output: `ok:${args.value}`,
+        }
+      },
+    })
+
+    const tool = await toLangChainTool(info, bridge())
+    const result = await tool.invoke({
+      type: "tool_call",
+      id: "call-3",
+      name: "ok",
+      args: {
+        value: "done",
+      },
+    } as any)
+
+    expect(text(result)).toContain("ok:done")
+    expect(toolMetadataStore.get(metadataKey("session-1", "call-3"))?.status).toBe("completed")
   })
 })

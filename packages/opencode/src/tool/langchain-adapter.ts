@@ -9,7 +9,8 @@
  * - Permission integration via existing Permission.ask() + Deferred
  * - Case-insensitive tool name repair for hallucinated names
  */
-import { DynamicStructuredTool } from "@langchain/core/tools"
+import { DynamicStructuredTool, ToolInputParsingException } from "@langchain/core/tools"
+import { ToolMessage } from "@langchain/core/messages"
 import { Tool } from "./tool"
 import type { Agent } from "../agent/agent"
 import type { MessageV2 } from "../session/message-v2"
@@ -36,9 +37,12 @@ export const toolMetadataStore = new Map<
     title?: string
     metadata?: Record<string, any>
     attachments?: any[]
+    status?: "completed" | "error"
     timestamp: number
   }
 >()
+
+type Meta = NonNullable<ReturnType<typeof toolMetadataStore.get>>
 
 function pruneMetadataStore(): void {
   const now = Date.now()
@@ -99,6 +103,26 @@ function makeToolContext(bridge: ToolBridgeContext, callID?: string): Tool.Conte
   }
 }
 
+function callID(arg: unknown, config: unknown) {
+  const input = arg as any
+  if (input?.type === "tool_call" && typeof input.id === "string") return input.id
+  const cfg = config as any
+  return cfg?.toolCall?.id ?? cfg?.configurable?.tool_call_id ?? cfg?.metadata?.tool_call_id
+}
+
+function record(sessionID: string, toolCallId: string, input: Omit<Meta, "timestamp">) {
+  pruneMetadataStore()
+  toolMetadataStore.set(metadataKey(sessionID, toolCallId), {
+    ...input,
+    timestamp: Date.now(),
+  })
+}
+
+function fail(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return `Error: ${message}`
+}
+
 /**
  * Convert a single Malibu Tool.Info to a LangChain DynamicStructuredTool.
  *
@@ -119,7 +143,7 @@ export async function toLangChainTool(
     { description: initialized.description, parameters: initialized.parameters },
   )
 
-  return new DynamicStructuredTool({
+  const tool = new DynamicStructuredTool({
     name: info.id,
     description: initialized.description,
     schema: initialized.parameters,
@@ -131,27 +155,24 @@ export async function toLangChainTool(
         ?? undefined
       const ctx = makeToolContext(bridge, toolCallId)
 
-      // Fire tool.execute.before plugin hook
-      await Plugin.trigger(
-        "tool.execute.before",
-        {
-          tool: info.id,
-          sessionID: ctx.sessionID,
-          callID: ctx.callID,
-        },
-        { args },
-      )
-
       try {
+        await Plugin.trigger(
+          "tool.execute.before",
+          {
+            tool: info.id,
+            sessionID: ctx.sessionID,
+            callID: ctx.callID,
+          },
+          { args },
+        )
+
         const result = await initialized.execute(args, ctx)
 
-        // Store metadata in side-channel for harness-processor to read
         if (toolCallId) {
-          pruneMetadataStore()
-          toolMetadataStore.set(metadataKey(bridge.sessionID, toolCallId), {
+          record(bridge.sessionID, toolCallId, {
             title: result.title,
             metadata: result.metadata,
-            timestamp: Date.now(),
+            status: "completed",
             attachments: result.attachments?.map((attachment) => ({
               ...attachment,
               id: PartID.ascending(),
@@ -161,7 +182,6 @@ export async function toLangChainTool(
           })
         }
 
-        // Fire tool.execute.after plugin hook
         await Plugin.trigger(
           "tool.execute.after",
           {
@@ -175,6 +195,11 @@ export async function toLangChainTool(
 
         return result.output
       } catch (error: any) {
+        if (toolCallId) {
+          record(bridge.sessionID, toolCallId, {
+            status: "error",
+          })
+        }
         if (error?.name === "RejectedError" || error?.name === "DeniedError" || error?.name === "CorrectedError") {
           log.info("tool permission denied", { tool: info.id, error: error.message })
           return `Permission denied: ${error.message}`
@@ -183,10 +208,34 @@ export async function toLangChainTool(
           tool: info.id,
           error: error.message,
         })
-        return `Error: ${error.message}`
+        return fail(error)
       }
     },
   })
+
+  const orig = tool.call.bind(tool)
+  tool.call = async (arg: any, configArg?: any, tags?: string[]) => {
+    try {
+      return await orig(arg, configArg, tags)
+    } catch (error) {
+      if (!(error instanceof ToolInputParsingException)) throw error
+      const id = callID(arg, configArg)
+      if (id) {
+        record(bridge.sessionID, id, {
+          status: "error",
+        })
+      }
+      const content = fail(error)
+      if (!id) return content
+      return new ToolMessage({
+        tool_call_id: id,
+        name: info.id,
+        content,
+      })
+    }
+  }
+
+  return tool
 }
 
 /**
