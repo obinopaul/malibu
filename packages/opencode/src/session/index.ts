@@ -1,4 +1,4 @@
-import { Slug } from "@opencode-ai/util/slug"
+import { Slug } from "@malibu-ai/util/slug"
 import path from "path"
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
@@ -32,6 +32,7 @@ import { Permission } from "@/permission"
 import { Global } from "@/global"
 import type { LanguageModelV2Usage } from "@ai-sdk/provider"
 import { iife } from "@/util/iife"
+import { Harness } from "@/agent/harness"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -327,7 +328,7 @@ export namespace Session {
       )
     })
     const cfg = await Config.get()
-    if (!result.parentID && (Flag.OPENCODE_AUTO_SHARE || cfg.share === "auto"))
+    if (!result.parentID && (Flag.MALIBU_AUTO_SHARE || cfg.share === "auto"))
       share(result.id).catch(() => {
         // Silently ignore sharing errors during session creation
       })
@@ -339,7 +340,7 @@ export namespace Session {
 
   export function plan(input: { slug: string; time: { created: number } }) {
     const base = Instance.project.vcs
-      ? path.join(Instance.worktree, ".opencode", "plans")
+      ? path.join(Instance.worktree, ".malibu", "plans")
       : path.join(Global.Path.data, "plans")
     return path.join(base, [input.time.created, input.slug].join("-") + ".md")
   }
@@ -669,6 +670,13 @@ export namespace Session {
         await remove(child.id)
       }
       await unshare(sessionID).catch(() => {})
+      // Clean up LangGraph checkpoint data for this session
+      try {
+        const checkpointer = Harness.getCheckpointer()
+        await checkpointer.deleteThread(sessionID)
+      } catch {
+        // Checkpoint cleanup is best-effort
+      }
       // CASCADE delete handles messages and parts automatically
       Database.use((db) => {
         db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run()
@@ -724,6 +732,35 @@ export namespace Session {
         )
       })
       return input.messageID
+    },
+  )
+
+  export const clearMessages = fn(
+    z.object({
+      sessionID: SessionID.zod,
+    }),
+    async (input) => {
+      const msgs = await messages({ sessionID: input.sessionID })
+      // Clean up LangGraph checkpoint data so the agent starts fresh
+      try {
+        const checkpointer = Harness.getCheckpointer()
+        await checkpointer.deleteThread(input.sessionID)
+      } catch {
+        // Checkpoint cleanup is best-effort
+      }
+      Database.use((db) => {
+        db.delete(MessageTable)
+          .where(eq(MessageTable.session_id, input.sessionID))
+          .run()
+        Database.effect(() => {
+          for (const msg of msgs) {
+            Bus.publish(MessageV2.Event.Removed, {
+              sessionID: input.sessionID,
+              messageID: msg.id,
+            })
+          }
+        })
+      })
     },
   )
 
@@ -816,7 +853,7 @@ export namespace Session {
       // OpenRouter provides inputTokens as the total count of input tokens (including cached).
       // AFAIK other providers (OpenRouter/OpenAI/Gemini etc.) do it the same way e.g. vercel/ai#8794 (comment)
       // Anthropic does it differently though - inputTokens doesn't include cached tokens.
-      // It looks like OpenCode's cost calculation assumes all providers return inputTokens the same way Anthropic does (I'm guessing getUsage logic was originally implemented with anthropic), so it's causing incorrect cost calculation for OpenRouter and others.
+      // It looks like Malibu's cost calculation assumes all providers return inputTokens the same way Anthropic does (I'm guessing getUsage logic was originally implemented with anthropic), so it's causing incorrect cost calculation for OpenRouter and others.
       const excludesCachedTokens = !!(input.metadata?.["anthropic"] || input.metadata?.["bedrock"])
       const adjustedInputTokens = safe(
         excludesCachedTokens ? inputTokens : inputTokens - cacheReadInputTokens - cacheWriteInputTokens,

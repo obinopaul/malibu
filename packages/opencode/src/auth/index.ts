@@ -5,7 +5,7 @@ import { zod } from "@/util/effect-zod"
 import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 
-export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
+export const OAUTH_DUMMY_KEY = "malibu-oauth-dummy-key"
 
 const file = path.join(Global.Path.data, "auth.json")
 
@@ -48,7 +48,7 @@ export namespace Auth {
     readonly remove: (key: string) => Effect.Effect<void, AuthError>
   }
 
-  export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Auth") {}
+  export class Service extends ServiceMap.Service<Service, Interface>()("@malibu/Auth") {}
 
   export const layer = Layer.effect(
     Service,

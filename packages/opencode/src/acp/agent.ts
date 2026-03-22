@@ -43,7 +43,7 @@ import { Config } from "@/config/config"
 import { Todo } from "@/session/todo"
 import { z } from "zod"
 import { LoadAPIKeyError } from "ai"
-import type { AssistantMessage, Event, OpencodeClient, SessionMessageResponse, ToolPart } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, Event, MalibuClient, SessionMessageResponse, ToolPart } from "@malibu-ai/sdk/v2"
 import { applyPatch } from "diff"
 
 type ModeOption = { id: string; name: string; description?: string }
@@ -55,7 +55,7 @@ export namespace ACP {
   const log = Log.create({ service: "acp-agent" })
 
   async function getContextLimit(
-    sdk: OpencodeClient,
+    sdk: MalibuClient,
     providerID: ProviderID,
     modelID: ModelID,
     directory: string,
@@ -75,7 +75,7 @@ export namespace ACP {
 
   async function sendUsageUpdate(
     connection: AgentSideConnection,
-    sdk: OpencodeClient,
+    sdk: MalibuClient,
     sessionID: string,
     directory: string,
   ): Promise<void> {
@@ -123,7 +123,7 @@ export namespace ACP {
       })
   }
 
-  export async function init({ sdk: _sdk }: { sdk: OpencodeClient }) {
+  export async function init({ sdk: _sdk }: { sdk: MalibuClient }) {
     return {
       create: (connection: AgentSideConnection, fullConfig: ACPConfig) => {
         return new Agent(connection, fullConfig)
@@ -134,7 +134,7 @@ export namespace ACP {
   export class Agent implements ACPAgent {
     private connection: AgentSideConnection
     private config: ACPConfig
-    private sdk: OpencodeClient
+    private sdk: MalibuClient
     private sessionManager: ACPSessionManager
     private eventAbort = new AbortController()
     private eventStarted = false
@@ -521,18 +521,18 @@ export namespace ACP {
       log.info("initialize", { protocolVersion: params.protocolVersion })
 
       const authMethod: AuthMethod = {
-        description: "Run `opencode auth login` in the terminal",
-        name: "Login with opencode",
-        id: "opencode-login",
+        description: "Run `malibu auth login` in the terminal",
+        name: "Login with malibu",
+        id: "malibu-login",
       }
 
       // If client supports terminal-auth capability, use that instead.
       if (params.clientCapabilities?._meta?.["terminal-auth"] === true) {
         authMethod._meta = {
           "terminal-auth": {
-            command: "opencode",
+            command: "malibu",
             args: ["auth", "login"],
-            label: "OpenCode Login",
+            label: "Malibu Login",
           },
         }
       }
@@ -557,7 +557,7 @@ export namespace ACP {
         },
         authMethods: [authMethod],
         agentInfo: {
-          name: "OpenCode",
+          name: "Malibu",
           version: Installation.VERSION,
         },
       }
@@ -983,7 +983,7 @@ export namespace ACP {
           }
         } else if (part.type === "file") {
           // Replay file attachments as appropriate ACP content blocks.
-          // OpenCode stores files internally as { type: "file", url, filename, mime }.
+          // Malibu stores files internally as { type: "file", url, filename, mime }.
           // We convert these back to ACP blocks based on the URL scheme and MIME type:
           // - file:// URLs → resource_link
           // - data: URLs with image/* → image block
@@ -1561,12 +1561,12 @@ export namespace ACP {
 
     if (specified && !providers.length) return specified
 
-    const opencodeProvider = providers.find((p) => p.id === "opencode")
-    if (opencodeProvider) {
-      if (opencodeProvider.models["big-pickle"]) {
-        return { providerID: ProviderID.opencode, modelID: ModelID.make("big-pickle") }
+    const malibuProvider = providers.find((p) => p.id === "malibu")
+    if (malibuProvider) {
+      if (malibuProvider.models["big-pickle"]) {
+        return { providerID: ProviderID.malibu, modelID: ModelID.make("big-pickle") }
       }
-      const [best] = Provider.sort(Object.values(opencodeProvider.models))
+      const [best] = Provider.sort(Object.values(malibuProvider.models))
       if (best) {
         return {
           providerID: ProviderID.make(best.providerID),
@@ -1586,7 +1586,7 @@ export namespace ACP {
 
     if (specified) return specified
 
-    return { providerID: ProviderID.opencode, modelID: ModelID.make("big-pickle") }
+    return { providerID: ProviderID.malibu, modelID: ModelID.make("big-pickle") }
   }
 
   function parseUri(
@@ -1701,7 +1701,7 @@ export namespace ACP {
     availableVariants: string[]
   }) {
     return {
-      opencode: {
+      malibu: {
         modelId: `${input.model.providerID}/${input.model.modelID}`,
         variant: input.variant ?? null,
         availableVariants: input.availableVariants,

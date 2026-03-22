@@ -1,10 +1,12 @@
 import { PlanExitTool } from "./plan"
 import { QuestionTool } from "./question"
 import { BashTool } from "./bash"
+import { ExecuteTool, EditFileTool, LsTool, ReadFileTool, WriteFileTool } from "./deepagent-filesystem"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { BatchTool } from "./batch"
+import { ListTool } from "./ls"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { TodoWriteTool, TodoReadTool } from "./todo"
@@ -17,7 +19,7 @@ import { Tool } from "./tool"
 import { Instance } from "../project/instance"
 import { Config } from "../config/config"
 import path from "path"
-import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
+import { type ToolContext as PluginToolContext, type ToolDefinition } from "@malibu-ai/plugin"
 import z from "zod"
 import { Plugin } from "../plugin"
 import { ProviderID, type ModelID } from "../provider/schema"
@@ -96,20 +98,26 @@ export namespace ToolRegistry {
     custom.push(tool)
   }
 
-  async function all(): Promise<Tool.Info[]> {
+  export async function all(): Promise<Tool.Info[]> {
     const custom = await state().then((x) => x.custom)
     const config = await Config.get()
-    const question = ["app", "cli", "desktop"].includes(Flag.OPENCODE_CLIENT) || Flag.OPENCODE_ENABLE_QUESTION_TOOL
+    const question = ["app", "cli", "desktop"].includes(Flag.MALIBU_CLIENT) || Flag.MALIBU_ENABLE_QUESTION_TOOL
 
     return [
       InvalidTool,
       ...(question ? [QuestionTool] : []),
       BashTool,
+      ExecuteTool,
+      ListTool,
+      LsTool,
       ReadTool,
+      ReadFileTool,
       GlobTool,
       GrepTool,
       EditTool,
+      EditFileTool,
       WriteTool,
+      WriteFileTool,
       TaskTool,
       WebFetchTool,
       TodoWriteTool,
@@ -118,9 +126,9 @@ export namespace ToolRegistry {
       CodeSearchTool,
       SkillTool,
       ApplyPatchTool,
-      ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
+      ...(Flag.MALIBU_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
       ...(config.experimental?.batch_tool === true ? [BatchTool] : []),
-      ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [PlanExitTool] : []),
+      ...(Flag.MALIBU_EXPERIMENTAL_PLAN_MODE && Flag.MALIBU_CLIENT === "cli" ? [PlanExitTool] : []),
       ...custom,
     ]
   }
@@ -142,7 +150,7 @@ export namespace ToolRegistry {
         .filter((t) => {
           // Enable websearch/codesearch for zen users OR via enable flag
           if (t.id === "codesearch" || t.id === "websearch") {
-            return model.providerID === ProviderID.opencode || Flag.OPENCODE_ENABLE_EXA
+            return model.providerID === ProviderID.malibu || Flag.MALIBU_ENABLE_EXA
           }
 
           // use apply tool in same format as codex

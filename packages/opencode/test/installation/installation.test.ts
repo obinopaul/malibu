@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test"
+import path from "path"
+import fs from "fs/promises"
 import { Effect, Layer, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
+import { tmpdir } from "../fixture/fixture"
 
 const encoder = new TextEncoder()
 
@@ -48,6 +51,99 @@ function testLayer(
 }
 
 describe("installation", () => {
+  describe("dependency health", () => {
+    test("passes when Bun version matches and probes are readable", async () => {
+      await using tmp = await tmpdir({
+        init: async (dir) => {
+          await fs.writeFile(
+            path.join(dir, "package.json"),
+            JSON.stringify({ packageManager: "bun@1.3.10" }),
+          )
+          await fs.mkdir(path.join(dir, "packages", "opencode", "node_modules", "deepagents"), { recursive: true })
+          await fs.writeFile(
+            path.join(dir, "packages", "opencode", "node_modules", "deepagents", "package.json"),
+            JSON.stringify({ name: "deepagents" }),
+          )
+        },
+      })
+
+      await expect(
+        Installation.checkDependencyHealth({
+          root: tmp.path,
+          bun: "1.3.10",
+          probes: ["packages/opencode/node_modules/deepagents"],
+        }),
+      ).resolves.toBeUndefined()
+    })
+
+    test("passes when Bun uses a newer patch in the pinned minor line", async () => {
+      await using tmp = await tmpdir({
+        init: async (dir) => {
+          await fs.writeFile(
+            path.join(dir, "package.json"),
+            JSON.stringify({ packageManager: "bun@1.3.10" }),
+          )
+          await fs.mkdir(path.join(dir, "packages", "opencode", "node_modules", "deepagents"), { recursive: true })
+          await fs.writeFile(
+            path.join(dir, "packages", "opencode", "node_modules", "deepagents", "package.json"),
+            JSON.stringify({ name: "deepagents" }),
+          )
+        },
+      })
+
+      await expect(
+        Installation.checkDependencyHealth({
+          root: tmp.path,
+          bun: "1.3.11",
+          probes: ["packages/opencode/node_modules/deepagents"],
+        }),
+      ).resolves.toBeUndefined()
+    })
+
+    test("fails fast on older Bun patch versions", async () => {
+      await using tmp = await tmpdir({
+        init: async (dir) => {
+          await fs.writeFile(
+            path.join(dir, "package.json"),
+            JSON.stringify({ packageManager: "bun@1.3.10" }),
+          )
+          await fs.mkdir(path.join(dir, "packages", "opencode", "node_modules", "deepagents"), { recursive: true })
+          await fs.writeFile(
+            path.join(dir, "packages", "opencode", "node_modules", "deepagents", "package.json"),
+            JSON.stringify({ name: "deepagents" }),
+          )
+        },
+      })
+
+      await expect(
+        Installation.checkDependencyHealth({
+          root: tmp.path,
+          bun: "1.3.9",
+          probes: ["packages/opencode/node_modules/deepagents"],
+        }),
+      ).rejects.toThrow("Expected Bun 1.3.10 or newer patch release, but found 1.3.9.")
+    })
+
+    test("fails when a Bun dependency probe is unreadable", async () => {
+      await using tmp = await tmpdir({
+        init: async (dir) => {
+          await fs.writeFile(
+            path.join(dir, "package.json"),
+            JSON.stringify({ packageManager: "bun@1.3.10" }),
+          )
+        },
+      })
+
+      await expect(
+        Installation.checkDependencyHealth({
+          root: tmp.path,
+          bun: "1.3.10",
+          probes: ["packages/opencode/node_modules/deepagents"],
+        }),
+      ).rejects.toThrow("Unreadable dependency entries:")
+    })
+  })
+
   describe("latest", () => {
     test("reads release version from GitHub releases", async () => {
       const layer = testLayer(() => jsonResponse({ tag_name: "v1.2.3" }))
@@ -117,8 +213,8 @@ describe("installation", () => {
         () => jsonResponse({ versions: { stable: "2.0.0" } }),
         (cmd, args) => {
           // getBrewFormula: return core formula (no tap)
-          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/opencode")) return ""
-          if (cmd === "brew" && args.includes("--formula") && args.includes("opencode")) return "opencode"
+          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/malibu")) return ""
+          if (cmd === "brew" && args.includes("--formula") && args.includes("malibu")) return "malibu"
           return ""
         },
       )
@@ -136,7 +232,7 @@ describe("installation", () => {
       const layer = testLayer(
         () => jsonResponse({}), // HTTP not used for tap formula
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/opencode") && args.includes("--formula")) return "opencode"
+          if (cmd === "brew" && args.includes("anomalyco/tap/malibu") && args.includes("--formula")) return "malibu"
           if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
           return ""
         },

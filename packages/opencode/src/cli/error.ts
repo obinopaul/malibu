@@ -1,19 +1,21 @@
 import { ConfigMarkdown } from "@/config/markdown"
 import { Config } from "../config/config"
+import { Installation } from "../installation"
 import { MCP } from "../mcp"
 import { Provider } from "../provider/provider"
 import { UI } from "./ui"
 
 export function FormatError(input: unknown) {
+  if (Installation.DependencyHealthError.isInstance(input)) return input.data.message
   if (MCP.Failed.isInstance(input))
-    return `MCP server "${input.data.name}" failed. Note, opencode does not support MCP authentication yet.`
+    return `MCP server "${input.data.name}" failed. Note, malibu does not support MCP authentication yet.`
   if (Provider.ModelNotFoundError.isInstance(input)) {
     const { providerID, modelID, suggestions } = input.data
     return [
       `Model not found: ${providerID}/${modelID}`,
       ...(Array.isArray(suggestions) && suggestions.length ? ["Did you mean: " + suggestions.join(", ")] : []),
-      `Try: \`opencode models\` to list available models`,
-      `Or check your config (opencode.json) provider/model names`,
+      `Try: \`malibu models\` to list available models`,
+      `Or check your config (malibu.json) provider/model names`,
     ].join("\n")
   }
   if (Provider.InitError.isInstance(input)) {

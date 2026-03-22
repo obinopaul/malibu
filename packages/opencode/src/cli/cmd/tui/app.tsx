@@ -216,7 +216,7 @@ function App() {
   const promptRef = usePromptRef()
 
   useKeyboard((evt) => {
-    if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
+    if (!Flag.MALIBU_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
     if (!renderer.getSelection()) return
 
     // Windows Terminal-like behavior:
@@ -262,23 +262,23 @@ function App() {
 
   // Update terminal window title based on current route and session
   createEffect(() => {
-    if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
+    if (!terminalTitleEnabled() || Flag.MALIBU_DISABLE_TERMINAL_TITLE) return
 
     if (route.data.type === "home") {
-      renderer.setTerminalTitle("OpenCode")
+      renderer.setTerminalTitle("Malibu")
       return
     }
 
     if (route.data.type === "session") {
       const session = sync.session.get(route.data.sessionID)
       if (!session || SessionApi.isDefaultTitle(session.title)) {
-        renderer.setTerminalTitle("OpenCode")
+        renderer.setTerminalTitle("Malibu")
         return
       }
 
       // Truncate title to 40 chars max
       const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
-      renderer.setTerminalTitle(`OC | ${title}`)
+      renderer.setTerminalTitle(`Malibu | ${title}`)
     }
   })
 
@@ -372,7 +372,7 @@ function App() {
         dialog.replace(() => <DialogSessionList />)
       },
     },
-    ...(Flag.OPENCODE_EXPERIMENTAL_WORKSPACES
+    ...(Flag.MALIBU_EXPERIMENTAL_WORKSPACES
       ? [
           {
             title: "Manage workspaces",
@@ -396,7 +396,6 @@ function App() {
       category: "Session",
       slash: {
         name: "new",
-        aliases: ["clear"],
       },
       onSelect: () => {
         const current = promptRef.current
@@ -410,6 +409,28 @@ function App() {
           workspaceID,
         })
         dialog.clear()
+      },
+    },
+    {
+      title: "Clear session messages",
+      suggested: route.data.type === "session",
+      value: "session.clear",
+      category: "Session",
+      slash: {
+        name: "clear",
+      },
+      onSelect: async () => {
+        if (route.data.type !== "session") return
+        const sessionID = route.data.sessionID
+        const msgs = sync.data.message[sessionID]
+        if (!msgs || msgs.length === 0) return
+        // Snapshot IDs before iterating — the reactive store shrinks as
+        // each deletion event fires, which would skip elements otherwise
+        const ids = msgs.map((m) => m.id)
+        for (const id of ids) {
+          await sdk.client.session.deleteMessage({ sessionID, messageID: id })
+        }
+        toast.show({ message: "Session cleared", variant: "info" })
       },
     },
     {
@@ -533,7 +554,7 @@ function App() {
     {
       title: "View status",
       keybind: "status_view",
-      value: "opencode.status",
+      value: "malibu.status",
       slash: {
         name: "status",
       },
@@ -578,7 +599,7 @@ function App() {
       title: "Open docs",
       value: "docs.open",
       onSelect: () => {
-        open("https://opencode.ai/docs").catch(() => {})
+        open("https://malibu.ai/docs").catch(() => {})
         dialog.clear()
       },
       category: "System",
@@ -733,7 +754,7 @@ function App() {
     toast.show({
       variant: "info",
       title: "Update Available",
-      message: `OpenCode v${evt.properties.version} is available. Run 'opencode upgrade' to update manually.`,
+      message: `Malibu v${evt.properties.version} is available. Run 'malibu upgrade' to update manually.`,
       duration: 10000,
     })
   })
@@ -744,14 +765,14 @@ function App() {
       height={dimensions().height}
       backgroundColor={theme.background}
       onMouseDown={(evt) => {
-        if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
+        if (!Flag.MALIBU_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
         if (evt.button !== MouseButton.RIGHT) return
 
         if (!Selection.copy(renderer, toast)) return
         evt.preventDefault()
         evt.stopPropagation()
       }}
-      onMouseUp={Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? undefined : () => Selection.copy(renderer, toast)}
+      onMouseUp={Flag.MALIBU_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? undefined : () => Selection.copy(renderer, toast)}
     >
       <Switch>
         <Match when={route.data.type === "home"}>
@@ -788,7 +809,7 @@ function ErrorComponent(props: {
   })
   const [copied, setCopied] = createSignal(false)
 
-  const issueURL = new URL("https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml")
+  const issueURL = new URL("https://github.com/anomalyco/malibu/issues/new?template=bug-report.yml")
 
   // Choose safe fallback colors per mode since theme context may not be available
   const isLight = props.mode === "light"
@@ -810,7 +831,7 @@ function ErrorComponent(props: {
     )
   }
 
-  issueURL.searchParams.set("opencode-version", Installation.VERSION)
+  issueURL.searchParams.set("malibu-version", Installation.VERSION)
 
   const copyIssueURL = () => {
     Clipboard.copy(issueURL.toString()).then(() => {

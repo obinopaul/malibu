@@ -5,20 +5,35 @@ import { makeRunPromise } from "@/effect/run-service"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import path from "path"
+import { readdir, readFile } from "fs/promises"
 import z from "zod"
 import { BusEvent } from "@/bus/bus-event"
 import { Flag } from "../flag/flag"
 import { Log } from "../util/log"
+import { NamedError } from "@malibu-ai/util/error"
 
 declare global {
-  const OPENCODE_VERSION: string
-  const OPENCODE_CHANNEL: string
+  const MALIBU_VERSION: string
+  const MALIBU_CHANNEL: string
 }
 
 export namespace Installation {
   const log = Log.create({ service: "installation" })
+  const ROOT = path.resolve(import.meta.dir, "../../../..")
+  const PROBES = [
+    "packages/opencode/node_modules/deepagents",
+    "packages/opencode/node_modules/gitlab-ai-provider",
+    "packages/opencode/node_modules/@babel/core",
+  ]
+  let health: Promise<void> | undefined
 
   export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
+  export const DependencyHealthError = NamedError.create(
+    "DependencyHealthError",
+    z.object({
+      message: z.string(),
+    }),
+  )
 
   export const Event = {
     Updated: BusEvent.define(
@@ -45,9 +60,113 @@ export namespace Installation {
     })
   export type Info = z.infer<typeof Info>
 
-  export const VERSION = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "local"
-  export const CHANNEL = typeof OPENCODE_CHANNEL === "string" ? OPENCODE_CHANNEL : "local"
-  export const USER_AGENT = `opencode/${CHANNEL}/${VERSION}/${Flag.OPENCODE_CLIENT}`
+  export const VERSION = typeof MALIBU_VERSION === "string" ? MALIBU_VERSION : "local"
+  export const CHANNEL = typeof MALIBU_CHANNEL === "string" ? MALIBU_CHANNEL : "local"
+  export const USER_AGENT = `malibu/${CHANNEL}/${VERSION}/${Flag.MALIBU_CLIENT}`
+
+  function detail(error: unknown) {
+    if (error instanceof Error) return error.message
+    return String(error)
+  }
+
+  function parse(version: string) {
+    const match = version.match(/^(\d+)\.(\d+)\.(\d+)/)
+    if (!match) return
+    return {
+      major: Number(match[1]),
+      minor: Number(match[2]),
+      patch: Number(match[3]),
+    }
+  }
+
+  function mismatch(expected?: string, actual?: string) {
+    if (!expected || !actual) return
+    const exp = parse(expected)
+    const act = parse(actual)
+    if (!exp || !act) {
+      if (expected !== actual) return `Expected Bun ${expected} but found ${actual}.`
+      return
+    }
+    if (exp.major !== act.major || exp.minor !== act.minor) {
+      return `Expected Bun ${expected} but found ${actual}.`
+    }
+    if (act.patch < exp.patch) {
+      return `Expected Bun ${expected} or newer patch release, but found ${actual}.`
+    }
+  }
+
+  async function pinned(root: string) {
+    const pkg = await Bun.file(path.join(root, "package.json")).json().catch(() => ({})) as { packageManager?: string }
+    if (!pkg.packageManager?.startsWith("bun@")) return undefined
+    return pkg.packageManager.slice("bun@".length)
+  }
+
+  async function probe(dir: string) {
+    await readdir(dir)
+    await readFile(path.join(dir, "package.json"), "utf8")
+  }
+
+  function message(input: {
+    root: string
+    failures: Array<{ path: string; error: string }>
+    version?: string
+  }) {
+    const lines = [
+      "Malibu dependency health check failed before tool execution.",
+    ]
+    if (input.version) lines.push(input.version)
+    if (input.failures.length > 0) {
+      lines.push("Unreadable dependency entries:")
+      lines.push(...input.failures.map((item) => `- ${path.relative(input.root, item.path) || item.path}: ${item.error}`))
+    }
+    lines.push("")
+    lines.push("Recovery:")
+    lines.push(`1. Use Bun ${input.expected ?? "from package.json"}.`)
+    lines.push("2. Clear the broken Bun install state for this repo.")
+    lines.push("3. Reinstall dependencies with Bun.")
+    lines.push("4. Rerun the tool smoke tests.")
+    return lines.join("\n")
+  }
+
+  export async function checkDependencyHealth(input?: { root?: string; bun?: string; probes?: string[] }) {
+    const root = input?.root ?? ROOT
+    const expected = await pinned(root)
+    const actual = input?.bun ?? Bun.version
+    const failures = [] as Array<{ path: string; error: string }>
+    const version = mismatch(expected, actual)
+
+    for (const item of input?.probes ?? PROBES) {
+      const next = path.resolve(root, item)
+      try {
+        await probe(next)
+      } catch (error) {
+        failures.push({
+          path: next,
+          error: detail(error),
+        })
+      }
+    }
+
+    if (!version && failures.length === 0) return
+    throw new DependencyHealthError({
+      message: message({
+        root,
+        failures,
+        version,
+      }),
+    })
+  }
+
+  export function resetDependencyHealth() {
+    health = undefined
+  }
+
+  export async function verifyDependencyHealth(input?: { root?: string; bun?: string; probes?: string[] }) {
+    if (process.env.MALIBU_SKIP_DEPENDENCY_HEALTH_CHECK === "1") return
+    if (input) return checkDependencyHealth(input)
+    if (!health) health = checkDependencyHealth()
+    return health
+  }
 
   export function isPreview() {
     return CHANNEL !== "latest"
@@ -80,7 +199,7 @@ export namespace Installation {
     readonly upgrade: (method: Method, target: string) => Effect.Effect<void, UpgradeFailedError>
   }
 
-  export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Installation") {}
+  export class Service extends ServiceMap.Service<Service, Interface>()("@malibu/Installation") {}
 
   export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner> =
     Layer.effect(
@@ -126,16 +245,16 @@ export namespace Installation {
         )
 
         const getBrewFormula = Effect.fnUntraced(function* () {
-          const tapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/opencode"])
-          if (tapFormula.includes("opencode")) return "anomalyco/tap/opencode"
-          const coreFormula = yield* text(["brew", "list", "--formula", "opencode"])
-          if (coreFormula.includes("opencode")) return "opencode"
-          return "opencode"
+          const tapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/malibu"])
+          if (tapFormula.includes("malibu")) return "anomalyco/tap/malibu"
+          const coreFormula = yield* text(["brew", "list", "--formula", "malibu"])
+          if (coreFormula.includes("malibu")) return "malibu"
+          return "malibu"
         })
 
         const upgradeCurl = Effect.fnUntraced(
           function* (target: string) {
-            const response = yield* httpOk.execute(HttpClientRequest.get("https://opencode.ai/install"))
+            const response = yield* httpOk.execute(HttpClientRequest.get("https://malibu.ai/install"))
             const body = yield* response.text
             const bodyBytes = new TextEncoder().encode(body)
             const proc = ChildProcess.make("bash", [], {
@@ -156,7 +275,7 @@ export namespace Installation {
         )
 
         const methodImpl = Effect.fn("Installation.method")(function* () {
-          if (process.execPath.includes(path.join(".opencode", "bin"))) return "curl" as Method
+          if (process.execPath.includes(path.join(".malibu", "bin"))) return "curl" as Method
           if (process.execPath.includes(path.join(".local", "bin"))) return "curl" as Method
           const exec = process.execPath.toLowerCase()
 
@@ -165,9 +284,9 @@ export namespace Installation {
             { name: "yarn", command: () => text(["yarn", "global", "list"]) },
             { name: "pnpm", command: () => text(["pnpm", "list", "-g", "--depth=0"]) },
             { name: "bun", command: () => text(["bun", "pm", "ls", "-g"]) },
-            { name: "brew", command: () => text(["brew", "list", "--formula", "opencode"]) },
-            { name: "scoop", command: () => text(["scoop", "list", "opencode"]) },
-            { name: "choco", command: () => text(["choco", "list", "--limit-output", "opencode"]) },
+            { name: "brew", command: () => text(["brew", "list", "--formula", "malibu"]) },
+            { name: "scoop", command: () => text(["scoop", "list", "malibu"]) },
+            { name: "choco", command: () => text(["choco", "list", "--limit-output", "malibu"]) },
           ]
 
           checks.sort((a, b) => {
@@ -181,7 +300,7 @@ export namespace Installation {
           for (const check of checks) {
             const output = yield* check.command()
             const installedName =
-              check.name === "brew" || check.name === "choco" || check.name === "scoop" ? "opencode" : "opencode-ai"
+              check.name === "brew" || check.name === "choco" || check.name === "scoop" ? "malibu" : "malibu-ai"
             if (output.includes(installedName)) {
               return check.name
             }
@@ -201,7 +320,7 @@ export namespace Installation {
               return info.formulae[0].versions.stable
             }
             const response = yield* httpOk.execute(
-              HttpClientRequest.get("https://formulae.brew.sh/api/formula/opencode.json").pipe(
+              HttpClientRequest.get("https://formulae.brew.sh/api/formula/malibu.json").pipe(
                 HttpClientRequest.acceptJson,
               ),
             )
@@ -215,7 +334,7 @@ export namespace Installation {
             const registry = reg.endsWith("/") ? reg.slice(0, -1) : reg
             const channel = CHANNEL
             const response = yield* httpOk.execute(
-              HttpClientRequest.get(`${registry}/opencode-ai/${channel}`).pipe(HttpClientRequest.acceptJson),
+              HttpClientRequest.get(`${registry}/malibu-ai/${channel}`).pipe(HttpClientRequest.acceptJson),
             )
             const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
             return data.version
@@ -224,7 +343,7 @@ export namespace Installation {
           if (detectedMethod === "choco") {
             const response = yield* httpOk.execute(
               HttpClientRequest.get(
-                "https://community.chocolatey.org/api/v2/Packages?$filter=Id%20eq%20%27opencode%27%20and%20IsLatestVersion&$select=Version",
+                "https://community.chocolatey.org/api/v2/Packages?$filter=Id%20eq%20%27malibu%27%20and%20IsLatestVersion&$select=Version",
               ).pipe(HttpClientRequest.setHeaders({ Accept: "application/json;odata=verbose" })),
             )
             const data = yield* HttpClientResponse.schemaBodyJson(ChocoPackage)(response)
@@ -234,7 +353,7 @@ export namespace Installation {
           if (detectedMethod === "scoop") {
             const response = yield* httpOk.execute(
               HttpClientRequest.get(
-                "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/opencode.json",
+                "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/malibu.json",
               ).pipe(HttpClientRequest.setHeaders({ Accept: "application/json" })),
             )
             const data = yield* HttpClientResponse.schemaBodyJson(ScoopManifest)(response)
@@ -242,7 +361,7 @@ export namespace Installation {
           }
 
           const response = yield* httpOk.execute(
-            HttpClientRequest.get("https://api.github.com/repos/anomalyco/opencode/releases/latest").pipe(
+            HttpClientRequest.get("https://api.github.com/repos/anomalyco/malibu/releases/latest").pipe(
               HttpClientRequest.acceptJson,
             ),
           )
@@ -257,13 +376,13 @@ export namespace Installation {
               result = yield* upgradeCurl(target)
               break
             case "npm":
-              result = yield* run(["npm", "install", "-g", `opencode-ai@${target}`])
+              result = yield* run(["npm", "install", "-g", `malibu-ai@${target}`])
               break
             case "pnpm":
-              result = yield* run(["pnpm", "install", "-g", `opencode-ai@${target}`])
+              result = yield* run(["pnpm", "install", "-g", `malibu-ai@${target}`])
               break
             case "bun":
-              result = yield* run(["bun", "install", "-g", `opencode-ai@${target}`])
+              result = yield* run(["bun", "install", "-g", `malibu-ai@${target}`])
               break
             case "brew": {
               const formula = yield* getBrewFormula()
@@ -288,10 +407,10 @@ export namespace Installation {
               break
             }
             case "choco":
-              result = yield* run(["choco", "upgrade", "opencode", `--version=${target}`, "-y"])
+              result = yield* run(["choco", "upgrade", "malibu", `--version=${target}`, "-y"])
               break
             case "scoop":
-              result = yield* run(["scoop", "install", `opencode@${target}`])
+              result = yield* run(["scoop", "install", `malibu@${target}`])
               break
             default:
               return yield* new UpgradeFailedError({ stderr: `Unknown method: ${m}` })

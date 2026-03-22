@@ -12,7 +12,7 @@ import {
 import { Config } from "../config/config"
 import { Log } from "../util/log"
 import { Process } from "../util/process"
-import { NamedError } from "@opencode-ai/util/error"
+import { NamedError } from "@malibu-ai/util/error"
 import z from "zod/v4"
 import { Instance } from "../project/instance"
 import { Installation } from "../installation"
@@ -381,7 +381,7 @@ export namespace MCP {
       for (const { name, transport } of transports) {
         try {
           const client = new Client({
-            name: "opencode",
+            name: "malibu",
             version: Installation.VERSION,
           })
           await withTimeout(client.connect(transport), connectTimeout)
@@ -423,7 +423,7 @@ export namespace MCP {
               // Show toast for needs_auth
               Bus.publish(TuiEvent.ToastShow, {
                 title: "MCP Authentication Required",
-                message: `Server "${key}" requires authentication. Run: opencode mcp auth ${key}`,
+                message: `Server "${key}" requires authentication. Run: malibu mcp auth ${key}`,
                 variant: "warning",
                 duration: 8000,
               }).catch((e) => log.debug("failed to show toast", { error: e }))
@@ -455,7 +455,7 @@ export namespace MCP {
         cwd,
         env: {
           ...process.env,
-          ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
+          ...(cmd === "malibu" ? { BUN_BE_BUN: "1" } : {}),
           ...mcp.environment,
         },
       })
@@ -466,7 +466,7 @@ export namespace MCP {
       const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
       try {
         const client = new Client({
-          name: "opencode",
+          name: "malibu",
           version: Installation.VERSION,
         })
         await withTimeout(client.connect(transport), connectTimeout)
@@ -803,7 +803,7 @@ export namespace MCP {
     // Try to connect - this will trigger the OAuth flow
     try {
       const client = new Client({
-        name: "opencode",
+        name: "malibu",
         version: Installation.VERSION,
       })
       await client.connect(transport)

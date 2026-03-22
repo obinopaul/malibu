@@ -47,7 +47,7 @@ await Bun.build({
   format: "esm",
   external: ["jsonc-parser"],
   define: {
-    OPENCODE_MIGRATIONS: JSON.stringify(migrations),
+    MALIBU_MIGRATIONS: JSON.stringify(migrations),
   },
 })
 

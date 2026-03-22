@@ -11,6 +11,7 @@ import { Instance } from "../project/instance"
 import { assertExternalDirectory } from "./external-directory"
 import { InstructionPrompt } from "../session/instruction"
 import { Filesystem } from "../util/filesystem"
+import { resolveToolPath } from "./deepagent-path"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -21,7 +22,7 @@ const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 export const ReadTool = Tool.define("read", {
   description: DESCRIPTION,
   parameters: z.object({
-    filePath: z.string().describe("The absolute path to the file or directory to read"),
+    filePath: z.string().describe("Absolute, current-directory-relative, or workspace-root-relative path to the file or directory to read"),
     offset: z.coerce.number().describe("The line number to start reading from (1-indexed)").optional(),
     limit: z.coerce.number().describe("The maximum number of lines to read (defaults to 2000)").optional(),
   }),
@@ -29,10 +30,7 @@ export const ReadTool = Tool.define("read", {
     if (params.offset !== undefined && params.offset < 1) {
       throw new Error("offset must be greater than or equal to 1")
     }
-    let filepath = params.filePath
-    if (!path.isAbsolute(filepath)) {
-      filepath = path.resolve(Instance.directory, filepath)
-    }
+    const filepath = resolveToolPath(params.filePath, { base: Instance.directory })
     const title = path.relative(Instance.worktree, filepath)
 
     const stat = Filesystem.stat(filepath)

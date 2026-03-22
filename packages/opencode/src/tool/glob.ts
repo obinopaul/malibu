@@ -6,6 +6,7 @@ import DESCRIPTION from "./glob.txt"
 import { Ripgrep } from "../file/ripgrep"
 import { Instance } from "../project/instance"
 import { assertExternalDirectory } from "./external-directory"
+import { resolveToolSearch } from "./deepagent-path"
 
 export const GlobTool = Tool.define("glob", {
   description: DESCRIPTION,
@@ -15,7 +16,7 @@ export const GlobTool = Tool.define("glob", {
       .string()
       .optional()
       .describe(
-        `The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.`,
+        `The directory to search in. Supports absolute, current-directory-relative, and workspace-root-relative paths. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.`,
       ),
   }),
   async execute(params, ctx) {
@@ -29,8 +30,7 @@ export const GlobTool = Tool.define("glob", {
       },
     })
 
-    let search = params.path ?? Instance.directory
-    search = path.isAbsolute(search) ? search : path.resolve(Instance.directory, search)
+    const search = resolveToolSearch(params.path, { base: Instance.directory })
     await assertExternalDirectory(ctx, search, { kind: "directory" })
 
     const limit = 100

@@ -5,6 +5,7 @@ import DESCRIPTION from "./ls.txt"
 import { Instance } from "../project/instance"
 import { Ripgrep } from "../file/ripgrep"
 import { assertExternalDirectory } from "./external-directory"
+import { resolveToolSearch } from "./deepagent-path"
 
 export const IGNORE_PATTERNS = [
   "node_modules/",
@@ -38,11 +39,11 @@ const LIMIT = 100
 export const ListTool = Tool.define("list", {
   description: DESCRIPTION,
   parameters: z.object({
-    path: z.string().describe("The absolute path to the directory to list (must be absolute, not relative)").optional(),
+    path: z.string().describe("Absolute, current-directory-relative, or workspace-root-relative directory path to list").optional(),
     ignore: z.array(z.string()).describe("List of glob patterns to ignore").optional(),
   }),
   async execute(params, ctx) {
-    const searchPath = path.resolve(Instance.directory, params.path || ".")
+    const searchPath = resolveToolSearch(params.path, { base: Instance.directory })
     await assertExternalDirectory(ctx, searchPath, { kind: "directory" })
 
     await ctx.ask({

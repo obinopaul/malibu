@@ -7,8 +7,8 @@ import { Process } from "../util/process"
 
 import DESCRIPTION from "./grep.txt"
 import { Instance } from "../project/instance"
-import path from "path"
 import { assertExternalDirectory } from "./external-directory"
+import { resolveToolSearch } from "./deepagent-path"
 
 const MAX_LINE_LENGTH = 2000
 
@@ -16,13 +16,16 @@ export const GrepTool = Tool.define("grep", {
   description: DESCRIPTION,
   parameters: z.object({
     pattern: z.string().describe("The regex pattern to search for in file contents"),
-    path: z.string().optional().describe("The directory to search in. Defaults to the current working directory."),
+    path: z.string().optional().describe("The directory to search in. Supports absolute, current-directory-relative, and workspace-root-relative paths. Defaults to the current working directory."),
     include: z.string().optional().describe('File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")'),
+    glob: z.string().optional().describe("Deep Agents alias for include. Mapped to Malibu's include parameter."),
   }),
   async execute(params, ctx) {
     if (!params.pattern) {
       throw new Error("pattern is required")
     }
+
+    const include = params.include ?? params.glob
 
     await ctx.ask({
       permission: "grep",
@@ -31,18 +34,18 @@ export const GrepTool = Tool.define("grep", {
       metadata: {
         pattern: params.pattern,
         path: params.path,
-        include: params.include,
+        include,
+        glob: params.glob,
       },
     })
 
-    let searchPath = params.path ?? Instance.directory
-    searchPath = path.isAbsolute(searchPath) ? searchPath : path.resolve(Instance.directory, searchPath)
+    const searchPath = resolveToolSearch(params.path, { base: Instance.directory })
     await assertExternalDirectory(ctx, searchPath, { kind: "directory" })
 
     const rgPath = await Ripgrep.filepath()
     const args = ["-nH", "--hidden", "--no-messages", "--field-match-separator=|", "--regexp", params.pattern]
-    if (params.include) {
-      args.push("--glob", params.include)
+    if (include) {
+      args.push("--glob", include)
     }
     args.push(searchPath)
 

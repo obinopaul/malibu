@@ -28,7 +28,7 @@ export const SessionRoutes = lazy(() =>
       "/",
       describeRoute({
         summary: "List sessions",
-        description: "Get a list of all OpenCode sessions, sorted by most recently updated.",
+        description: "Get a list of all Malibu sessions, sorted by most recently updated.",
         operationId: "session.list",
         responses: {
           200: {
@@ -96,7 +96,7 @@ export const SessionRoutes = lazy(() =>
       "/:sessionID",
       describeRoute({
         summary: "Get session",
-        description: "Retrieve detailed information about a specific OpenCode session.",
+        description: "Retrieve detailed information about a specific Malibu session.",
         tags: ["Session"],
         operationId: "session.get",
         responses: {
@@ -189,7 +189,7 @@ export const SessionRoutes = lazy(() =>
       "/",
       describeRoute({
         summary: "Create session",
-        description: "Create a new OpenCode session for interacting with AI assistants and managing conversations.",
+        description: "Create a new Malibu session for interacting with AI assistants and managing conversations.",
         operationId: "session.create",
         responses: {
           ...errors(400),
@@ -702,6 +702,32 @@ export const SessionRoutes = lazy(() =>
           sessionID: params.sessionID,
           messageID: params.messageID,
         })
+        return c.json(true)
+      },
+    )
+    .delete(
+      "/:sessionID/messages",
+      describeRoute({
+        summary: "Clear all messages",
+        description: "Delete all messages from a session, keeping the session itself.",
+        operationId: "session.clearMessages",
+        responses: {
+          200: {
+            description: "Successfully cleared messages",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      async (c) => {
+        const params = c.req.valid("param")
+        SessionPrompt.assertNotBusy(params.sessionID)
+        await Session.clearMessages({ sessionID: params.sessionID })
         return c.json(true)
       },
     )

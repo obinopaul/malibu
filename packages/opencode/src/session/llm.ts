@@ -186,7 +186,7 @@ export namespace LLM {
     }
 
     // Wire up toolExecutor for DWS workflow models so that tool calls
-    // from the workflow service are executed via opencode's tool system
+    // from the workflow service are executed via malibu's tool system
     // and results sent back over the WebSocket.
     if (language instanceof GitLabWorkflowLanguageModel) {
       const workflowModel = language
@@ -250,11 +250,11 @@ export namespace LLM {
       maxOutputTokens,
       abortSignal: input.abort,
       headers: {
-        ...(input.model.providerID.startsWith("opencode") && {
-          "x-opencode-project": Instance.project.id,
-          "x-opencode-session": input.sessionID,
-          "x-opencode-request": input.user.id,
-          "x-opencode-client": Flag.OPENCODE_CLIENT,
+        ...(input.model.providerID.startsWith("malibu") && {
+          "x-malibu-project": Instance.project.id,
+          "x-malibu-session": input.sessionID,
+          "x-malibu-request": input.user.id,
+          "x-malibu-client": Flag.MALIBU_CLIENT,
         }),
         ...input.model.headers,
         ...headers,

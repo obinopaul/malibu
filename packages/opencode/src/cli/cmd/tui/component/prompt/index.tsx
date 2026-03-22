@@ -20,9 +20,9 @@ import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useCommandDialog } from "../dialog-command"
 import { useRenderer } from "@opentui/solid"
 import { Editor } from "@tui/util/editor"
-import { useExit } from "../../context/exit"
+import { useExitGuard } from "../../hooks/use-exit-guard"
 import { Clipboard } from "../../util/clipboard"
-import type { FilePart } from "@opencode-ai/sdk/v2"
+import type { FilePart } from "@malibu-ai/sdk/v2"
 import { TuiEvent } from "../../event"
 import { iife } from "@/util/iife"
 import { Locale } from "@/util/locale"
@@ -533,7 +533,7 @@ export function Prompt(props: PromptProps) {
     if (!store.prompt.input) return
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
-      exit()
+      exitGuard.forceExit()
       return
     }
     const selectedModel = local.model.current()
@@ -671,7 +671,7 @@ export function Prompt(props: PromptProps) {
       }, 50)
     input.clear()
   }
-  const exit = useExit()
+  const exitGuard = useExitGuard()
 
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.visualCursor.offset
@@ -879,8 +879,7 @@ export function Prompt(props: PromptProps) {
                 }
                 if (keybind.match("app_exit", e)) {
                   if (store.prompt.input === "") {
-                    await exit()
-                    // Don't preventDefault - let textarea potentially handle the event
+                    await exitGuard.tryExit()
                     e.preventDefault()
                     return
                   }

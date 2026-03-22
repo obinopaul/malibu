@@ -10,13 +10,44 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
-  test("loads tools from .opencode/tool (singular)", async () => {
+  test("registers list and DeepAgent compatibility tools", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ids = await ToolRegistry.ids()
+        expect(ids).toContain("list")
+        expect(ids).toContain("ls")
+        expect(ids).toContain("read_file")
+        expect(ids).toContain("write_file")
+        expect(ids).toContain("edit_file")
+        expect(ids).toContain("execute")
+      },
+    })
+  })
+
+  test("keeps intentionally unexposed tools out of the registry", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ids = await ToolRegistry.ids()
+        expect(ids).not.toContain("multiedit")
+        expect(ids).not.toContain("todoread")
+        expect(ids).not.toContain("plan_enter")
+      },
+    })
+  })
+
+  test("loads tools from .malibu/tool (singular)", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        const opencodeDir = path.join(dir, ".opencode")
-        await fs.mkdir(opencodeDir, { recursive: true })
+        const malibuDir = path.join(dir, ".malibu")
+        await fs.mkdir(malibuDir, { recursive: true })
 
-        const toolDir = path.join(opencodeDir, "tool")
+        const toolDir = path.join(malibuDir, "tool")
         await fs.mkdir(toolDir, { recursive: true })
 
         await Bun.write(
@@ -44,13 +75,13 @@ describe("tool.registry", () => {
     })
   })
 
-  test("loads tools from .opencode/tools (plural)", async () => {
+  test("loads tools from .malibu/tools (plural)", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        const opencodeDir = path.join(dir, ".opencode")
-        await fs.mkdir(opencodeDir, { recursive: true })
+        const malibuDir = path.join(dir, ".malibu")
+        await fs.mkdir(malibuDir, { recursive: true })
 
-        const toolsDir = path.join(opencodeDir, "tools")
+        const toolsDir = path.join(malibuDir, "tools")
         await fs.mkdir(toolsDir, { recursive: true })
 
         await Bun.write(
@@ -81,18 +112,18 @@ describe("tool.registry", () => {
   test("loads tools with external dependencies without crashing", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        const opencodeDir = path.join(dir, ".opencode")
-        await fs.mkdir(opencodeDir, { recursive: true })
+        const malibuDir = path.join(dir, ".malibu")
+        await fs.mkdir(malibuDir, { recursive: true })
 
-        const toolsDir = path.join(opencodeDir, "tools")
+        const toolsDir = path.join(malibuDir, "tools")
         await fs.mkdir(toolsDir, { recursive: true })
 
         await Bun.write(
-          path.join(opencodeDir, "package.json"),
+          path.join(malibuDir, "package.json"),
           JSON.stringify({
             name: "custom-tools",
             dependencies: {
-              "@opencode-ai/plugin": "^0.0.0",
+              "@malibu-ai/plugin": "^0.0.0",
               cowsay: "^1.6.0",
             },
           }),

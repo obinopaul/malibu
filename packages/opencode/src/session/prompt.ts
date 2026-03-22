@@ -11,17 +11,15 @@ import { Session } from "."
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
 import { ModelID, ProviderID } from "../provider/schema"
-import { type Tool as AITool, tool, jsonSchema, type ToolCallOptions, asSchema } from "ai"
+import { asSchema } from "ai"
 import { SessionCompaction } from "./compaction"
 import { Instance } from "../project/instance"
 import { Bus } from "../bus"
-import { ProviderTransform } from "../provider/transform"
 import { SystemPrompt } from "./system"
 import { InstructionPrompt } from "./instruction"
 import { Plugin } from "../plugin"
 import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
-import MAX_STEPS from "../session/prompt/max-steps.txt"
 import { defer } from "../util/defer"
 import { ToolRegistry } from "../tool/registry"
 import { MCP } from "../mcp"
@@ -36,9 +34,10 @@ import { Command } from "../command"
 import { pathToFileURL, fileURLToPath } from "url"
 import { ConfigMarkdown } from "../config/markdown"
 import { SessionSummary } from "./summary"
-import { NamedError } from "@opencode-ai/util/error"
+import { NamedError } from "@malibu-ai/util/error"
 import { fn } from "@/util/fn"
-import { SessionProcessor } from "./processor"
+import { HarnessProcessor } from "./harness-processor"
+import { PermissionMiddleware } from "@/agent/permission-middleware"
 import { TaskTool } from "@/tool/task"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
@@ -49,6 +48,7 @@ import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
+// SubAgents are now handled by DeepAgent's built-in task tool
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -568,61 +568,31 @@ export namespace SessionPrompt {
         session,
       })
 
-      const processor = SessionProcessor.create({
-        assistantMessage: (await Session.updateMessage({
-          id: MessageID.ascending(),
-          parentID: lastUser.id,
-          role: "assistant",
-          mode: agent.name,
-          agent: agent.name,
-          variant: lastUser.variant,
-          path: {
-            cwd: Instance.directory,
-            root: Instance.worktree,
-          },
-          cost: 0,
-          tokens: {
-            input: 0,
-            output: 0,
-            reasoning: 0,
-            cache: { read: 0, write: 0 },
-          },
-          modelID: model.id,
-          providerID: model.providerID,
-          time: {
-            created: Date.now(),
-          },
-          sessionID,
-        })) as MessageV2.Assistant,
-        sessionID: sessionID,
-        model,
-        abort,
-      })
-      using _ = defer(() => InstructionPrompt.clear(processor.message.id))
-
-      // Check if user explicitly invoked an agent via @ in this turn
-      const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
-      const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
-
-      const tools = await resolveTools({
-        agent,
-        session,
-        model,
-        tools: lastUser.tools,
-        processor,
-        bypassAgentCheck,
-        messages: msgs,
-      })
-
-      // Inject StructuredOutput tool if JSON schema mode enabled
-      if (lastUser.format?.type === "json_schema") {
-        tools["StructuredOutput"] = createStructuredOutputTool({
-          schema: lastUser.format.schema,
-          onSuccess(output) {
-            structuredOutput = output
-          },
-        })
-      }
+      const assistantMessage = (await Session.updateMessage({
+        id: MessageID.ascending(),
+        parentID: lastUser.id,
+        role: "assistant",
+        mode: agent.name,
+        agent: agent.name,
+        variant: lastUser.variant,
+        path: {
+          cwd: Instance.directory,
+          root: Instance.worktree,
+        },
+        cost: 0,
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+        modelID: model.id,
+        providerID: model.providerID,
+        time: {
+          created: Date.now(),
+        },
+        sessionID,
+      })) as MessageV2.Assistant
 
       if (step === 1) {
         SessionSummary.summarize({
@@ -664,49 +634,160 @@ export namespace SessionPrompt {
         system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
       }
 
-      const result = await processor.process({
-        user: lastUser,
-        agent,
-        permission: session.permission,
-        abort,
-        sessionID,
-        system,
-        messages: [
-          ...MessageV2.toModelMessages(msgs, model),
-          ...(isLastStep
-            ? [
-                {
-                  role: "assistant" as const,
-                  content: MAX_STEPS,
+      let result: "continue" | "stop" | "compact"
+
+      // DeepAgent harness path — single engine, no toggle
+      {
+        const harnessProc = HarnessProcessor.create({
+          assistantMessage: assistantMessage,
+          sessionID,
+          model,
+          abort,
+        })
+        using _ = defer(() => InstructionPrompt.clear(harnessProc.message.id))
+
+        const toolInfos = await ToolRegistry.all()
+
+        // Filter tools through Permission.disabled()
+        const mergedPermission = Permission.merge(agent.permission, session.permission ?? [])
+        const disabledTools = Permission.disabled(
+          toolInfos.map((t) => t.id),
+          mergedPermission,
+        )
+        const filteredTools = toolInfos.filter((t) => {
+          if (disabledTools.has(t.id)) return false
+          if (lastUser.tools?.[t.id] === false) return false
+          return true
+        })
+
+        // Add MCP tools converted to Tool.Info format
+        try {
+          const mcpToolEntries = await MCP.tools()
+          for (const [key, mcpTool] of Object.entries(mcpToolEntries)) {
+            if (!mcpTool.execute) continue
+            const execute = mcpTool.execute
+            // Build a Zod schema from the MCP inputSchema if available.
+            // MCP provides JSON Schema; we convert the top-level properties
+            // to z.record(z.string(), z.any()) so LangChain passes them through,
+            // and embed the full schema in the description for the LLM.
+            const rawSchema = mcpTool.inputSchema
+              ? asSchema(mcpTool.inputSchema)
+              : undefined
+            let description = mcpTool.description ?? `MCP tool: ${key}`
+            if (rawSchema?.jsonSchema?.properties) {
+              const props = Object.entries(rawSchema.jsonSchema.properties as Record<string, any>)
+                .map(([name, prop]) => `  ${name}: ${prop.description ?? prop.type ?? "any"}`)
+                .join("\n")
+              description += `\n\nParameters:\n${props}`
+            }
+            filteredTools.push(
+              Tool.define(key, {
+                description,
+                parameters: rawSchema ? z.record(z.string(), z.any()) : z.object({}),
+                async execute(args, ctx) {
+                  await ctx.ask({
+                    permission: key,
+                    metadata: {},
+                    patterns: ["*"],
+                    always: ["*"],
+                  })
+
+                  await Plugin.trigger(
+                    "tool.execute.before",
+                    { tool: key, sessionID: ctx.sessionID, callID: ctx.callID },
+                    { args },
+                  )
+
+                  const mcpResult = await execute(args, {} as any)
+
+                  await Plugin.trigger(
+                    "tool.execute.after",
+                    { tool: key, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                    mcpResult,
+                  )
+
+                  const textParts: string[] = []
+                  for (const item of mcpResult.content ?? []) {
+                    if (item.type === "text") textParts.push(item.text)
+                  }
+
+                  const rawOutput = textParts.join("\n") || JSON.stringify(mcpResult)
+                  const truncated = await Truncate.output(rawOutput, {}, agent)
+                  return {
+                    output: truncated.content,
+                    title: key,
+                    metadata: {
+                      truncated: truncated.truncated,
+                      ...(truncated.truncated && { outputPath: truncated.outputPath }),
+                    },
+                  }
                 },
-              ]
-            : []),
-        ],
-        tools,
-        model,
-        toolChoice: format.type === "json_schema" ? "required" : undefined,
-      })
+              }),
+            )
+          }
+        } catch (e: any) {
+          log.warn("failed to load MCP tools", { error: e.message })
+        }
+
+        // Inject StructuredOutput tool for JSON schema mode
+        if (lastUser.format?.type === "json_schema") {
+          filteredTools.push(
+            Tool.define("StructuredOutput", {
+              description: STRUCTURED_OUTPUT_DESCRIPTION,
+              parameters: z.any(),
+              async execute(args) {
+                structuredOutput = args
+                return {
+                  output: "Structured output captured successfully.",
+                  title: "Structured Output",
+                  metadata: { valid: true },
+                }
+              },
+            }),
+          )
+        }
+
+        // Create permission callback for the harness
+        const onPermission = PermissionMiddleware.createPermissionCallback({
+          sessionID,
+          messageID: harnessProc.message.id,
+          agent,
+          sessionPermission: session.permission,
+        })
+
+        // DeepAgent handles sub-agent dispatch via built-in task tool —
+        // no manual @agent dispatch needed here
+        result = await harnessProc.process({
+          agent,
+          permission: session.permission,
+          system,
+          messages: msgs,
+          tools: filteredTools,
+          abort,
+          onPermission,
+        })
+      }
 
       // If structured output was captured, save it and exit immediately
       // This takes priority because the StructuredOutput tool was called successfully
       if (structuredOutput !== undefined) {
-        processor.message.structured = structuredOutput
-        processor.message.finish = processor.message.finish ?? "stop"
-        await Session.updateMessage(processor.message)
+        assistantMessage.structured = structuredOutput
+        assistantMessage.finish = assistantMessage.finish ?? "stop"
+        await Session.updateMessage(assistantMessage)
         break
       }
 
       // Check if model finished (finish reason is not "tool-calls" or "unknown")
-      const modelFinished = processor.message.finish && !["tool-calls", "unknown"].includes(processor.message.finish)
+      const modelFinished = assistantMessage.finish && !["tool-calls", "unknown"].includes(assistantMessage.finish)
 
-      if (modelFinished && !processor.message.error) {
+      if (modelFinished && !assistantMessage.error) {
         if (format.type === "json_schema") {
           // Model stopped without calling StructuredOutput tool
-          processor.message.error = new MessageV2.StructuredOutputError({
+          assistantMessage.error = new MessageV2.StructuredOutputError({
             message: "Model did not produce structured output",
             retries: 0,
           }).toObject()
-          await Session.updateMessage(processor.message)
+          await Session.updateMessage(assistantMessage)
           break
         }
       }
@@ -718,7 +799,7 @@ export namespace SessionPrompt {
           agent: lastUser.agent,
           model: lastUser.model,
           auto: true,
-          overflow: !processor.message.finish,
+          overflow: !assistantMessage.finish,
         })
       }
       continue
@@ -740,227 +821,6 @@ export namespace SessionPrompt {
       if (item.info.role === "user" && item.info.model) return item.info.model
     }
     return Provider.defaultModel()
-  }
-
-  /** @internal Exported for testing */
-  export async function resolveTools(input: {
-    agent: Agent.Info
-    model: Provider.Model
-    session: Session.Info
-    tools?: Record<string, boolean>
-    processor: SessionProcessor.Info
-    bypassAgentCheck: boolean
-    messages: MessageV2.WithParts[]
-  }) {
-    using _ = log.time("resolveTools")
-    const tools: Record<string, AITool> = {}
-
-    const context = (args: any, options: ToolCallOptions): Tool.Context => ({
-      sessionID: input.session.id,
-      abort: options.abortSignal!,
-      messageID: input.processor.message.id,
-      callID: options.toolCallId,
-      extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
-      agent: input.agent.name,
-      messages: input.messages,
-      metadata: async (val: { title?: string; metadata?: any }) => {
-        const match = input.processor.partFromToolCall(options.toolCallId)
-        if (match && match.state.status === "running") {
-          await Session.updatePart({
-            ...match,
-            state: {
-              title: val.title,
-              metadata: val.metadata,
-              status: "running",
-              input: args,
-              time: {
-                start: Date.now(),
-              },
-            },
-          })
-        }
-      },
-      async ask(req) {
-        await Permission.ask({
-          ...req,
-          sessionID: input.session.id,
-          tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
-        })
-      },
-    })
-
-    for (const item of await ToolRegistry.tools(
-      { modelID: ModelID.make(input.model.api.id), providerID: input.model.providerID },
-      input.agent,
-    )) {
-      const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
-      tools[item.id] = tool({
-        id: item.id as any,
-        description: item.description,
-        inputSchema: jsonSchema(schema as any),
-        async execute(args, options) {
-          const ctx = context(args, options)
-          await Plugin.trigger(
-            "tool.execute.before",
-            {
-              tool: item.id,
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-            },
-            {
-              args,
-            },
-          )
-          const result = await item.execute(args, ctx)
-          const output = {
-            ...result,
-            attachments: result.attachments?.map((attachment) => ({
-              ...attachment,
-              id: PartID.ascending(),
-              sessionID: ctx.sessionID,
-              messageID: input.processor.message.id,
-            })),
-          }
-          await Plugin.trigger(
-            "tool.execute.after",
-            {
-              tool: item.id,
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              args,
-            },
-            output,
-          )
-          return output
-        },
-      })
-    }
-
-    for (const [key, item] of Object.entries(await MCP.tools())) {
-      const execute = item.execute
-      if (!execute) continue
-
-      const transformed = ProviderTransform.schema(input.model, asSchema(item.inputSchema).jsonSchema)
-      item.inputSchema = jsonSchema(transformed)
-      // Wrap execute to add plugin hooks and format output
-      item.execute = async (args, opts) => {
-        const ctx = context(args, opts)
-
-        await Plugin.trigger(
-          "tool.execute.before",
-          {
-            tool: key,
-            sessionID: ctx.sessionID,
-            callID: opts.toolCallId,
-          },
-          {
-            args,
-          },
-        )
-
-        await ctx.ask({
-          permission: key,
-          metadata: {},
-          patterns: ["*"],
-          always: ["*"],
-        })
-
-        const result = await execute(args, opts)
-
-        await Plugin.trigger(
-          "tool.execute.after",
-          {
-            tool: key,
-            sessionID: ctx.sessionID,
-            callID: opts.toolCallId,
-            args,
-          },
-          result,
-        )
-
-        const textParts: string[] = []
-        const attachments: Omit<MessageV2.FilePart, "id" | "sessionID" | "messageID">[] = []
-
-        for (const contentItem of result.content) {
-          if (contentItem.type === "text") {
-            textParts.push(contentItem.text)
-          } else if (contentItem.type === "image") {
-            attachments.push({
-              type: "file",
-              mime: contentItem.mimeType,
-              url: `data:${contentItem.mimeType};base64,${contentItem.data}`,
-            })
-          } else if (contentItem.type === "resource") {
-            const { resource } = contentItem
-            if (resource.text) {
-              textParts.push(resource.text)
-            }
-            if (resource.blob) {
-              attachments.push({
-                type: "file",
-                mime: resource.mimeType ?? "application/octet-stream",
-                url: `data:${resource.mimeType ?? "application/octet-stream"};base64,${resource.blob}`,
-                filename: resource.uri,
-              })
-            }
-          }
-        }
-
-        const truncated = await Truncate.output(textParts.join("\n\n"), {}, input.agent)
-        const metadata = {
-          ...(result.metadata ?? {}),
-          truncated: truncated.truncated,
-          ...(truncated.truncated && { outputPath: truncated.outputPath }),
-        }
-
-        return {
-          title: "",
-          metadata,
-          output: truncated.content,
-          attachments: attachments.map((attachment) => ({
-            ...attachment,
-            id: PartID.ascending(),
-            sessionID: ctx.sessionID,
-            messageID: input.processor.message.id,
-          })),
-          content: result.content, // directly return content to preserve ordering when outputting to model
-        }
-      }
-      tools[key] = item
-    }
-
-    return tools
-  }
-
-  /** @internal Exported for testing */
-  export function createStructuredOutputTool(input: {
-    schema: Record<string, any>
-    onSuccess: (output: unknown) => void
-  }): AITool {
-    // Remove $schema property if present (not needed for tool input)
-    const { $schema, ...toolSchema } = input.schema
-
-    return tool({
-      id: "StructuredOutput" as any,
-      description: STRUCTURED_OUTPUT_DESCRIPTION,
-      inputSchema: jsonSchema(toolSchema as any),
-      async execute(args) {
-        // AI SDK validates args against inputSchema before calling execute()
-        input.onSuccess(args)
-        return {
-          output: "Structured output captured successfully.",
-          title: "Structured Output",
-          metadata: { valid: true },
-        }
-      },
-      toModelOutput(result) {
-        return {
-          type: "text",
-          value: result.output,
-        }
-      },
-    })
   }
 
   async function createUserMessage(input: PromptInput) {
@@ -1360,7 +1220,7 @@ export namespace SessionPrompt {
     if (!userMessage) return input.messages
 
     // Original logic when experimental plan mode is disabled
-    if (!Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE) {
+    if (!Flag.MALIBU_EXPERIMENTAL_PLAN_MODE) {
       if (input.agent.name === "plan") {
         userMessage.parts.push({
           id: PartID.ascending(),

@@ -8,7 +8,7 @@ import { MessageV2 } from "./message-v2"
 import z from "zod"
 import { Token } from "../util/token"
 import { Log } from "../util/log"
-import { SessionProcessor } from "./processor"
+import { HarnessProcessor } from "./harness-processor"
 import { fn } from "@/util/fn"
 import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
@@ -159,7 +159,7 @@ export namespace SessionCompaction {
         created: Date.now(),
       },
     })) as MessageV2.Assistant
-    const processor = SessionProcessor.create({
+    const processor = HarnessProcessor.create({
       assistantMessage: msg,
       sessionID: input.sessionID,
       model,
@@ -200,28 +200,42 @@ When constructing the summary, try to stick to this template:
 ---`
 
     const promptText = compacting.prompt ?? [defaultPrompt, ...compacting.context].join("\n\n")
-    const msgs = structuredClone(messages)
-    await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-    const result = await processor.process({
-      user: userMessage,
-      agent,
-      abort: input.abort,
-      sessionID: input.sessionID,
-      tools: {},
-      system: [],
-      messages: [
-        ...MessageV2.toModelMessages(msgs, model, { stripMedia: true }),
+    // Strip media from session messages for compaction (reduce tokens)
+    const compactionMsgs: MessageV2.WithParts[] = structuredClone(messages).map((m) => ({
+      ...m,
+      parts: m.parts.filter((p) => {
+        if (p.type === "file" && MessageV2.isMedia(p.mime)) return false
+        return true
+      }),
+    }))
+    // Append the compaction prompt as a synthetic user message
+    const compactionPromptMsg: MessageV2.WithParts = {
+      info: {
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: input.sessionID,
+        time: { created: Date.now() },
+        agent: "compaction",
+        model: { providerID: model.providerID, modelID: model.id },
+      } as MessageV2.User,
+      parts: [
         {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: promptText,
-            },
-          ],
-        },
+          id: PartID.ascending(),
+          messageID: MessageID.make("synthetic"),
+          sessionID: input.sessionID,
+          type: "text",
+          text: promptText,
+          synthetic: true,
+        } as MessageV2.TextPart,
       ],
-      model,
+    }
+    compactionMsgs.push(compactionPromptMsg)
+    const result = await processor.process({
+      agent,
+      system: [],
+      messages: compactionMsgs,
+      tools: [],
+      abort: input.abort,
     })
 
     if (result === "compact") {

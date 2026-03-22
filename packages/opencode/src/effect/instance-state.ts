@@ -2,7 +2,7 @@ import { Effect, ScopedCache, Scope } from "effect"
 import { Instance, type Shape } from "@/project/instance"
 import { registerDisposer } from "./instance-registry"
 
-const TypeId = "~opencode/InstanceState"
+const TypeId = "~malibu/InstanceState"
 
 export interface InstanceState<A, E = never, R = never> {
   readonly [TypeId]: typeof TypeId

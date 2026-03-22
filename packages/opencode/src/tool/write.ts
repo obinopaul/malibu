@@ -12,6 +12,7 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { trimDiff } from "./edit"
 import { assertExternalDirectory } from "./external-directory"
+import { resolveToolPath } from "./deepagent-path"
 
 const MAX_DIAGNOSTICS_PER_FILE = 20
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -20,10 +21,10 @@ export const WriteTool = Tool.define("write", {
   description: DESCRIPTION,
   parameters: z.object({
     content: z.string().describe("The content to write to the file"),
-    filePath: z.string().describe("The absolute path to the file to write (must be absolute, not relative)"),
+    filePath: z.string().describe("Absolute, current-directory-relative, or workspace-root-relative path to the file to write"),
   }),
   async execute(params, ctx) {
-    const filepath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
+    const filepath = resolveToolPath(params.filePath, { base: Instance.directory })
     await assertExternalDirectory(ctx, filepath)
 
     const exists = await Filesystem.exists(filepath)

@@ -1,208 +1,106 @@
-import yargs from "yargs"
-import { hideBin } from "yargs/helpers"
-import { RunCommand } from "./cli/cmd/run"
-import { GenerateCommand } from "./cli/cmd/generate"
-import { Log } from "./util/log"
-import { ConsoleCommand } from "./cli/cmd/account"
-import { ProvidersCommand } from "./cli/cmd/providers"
-import { AgentCommand } from "./cli/cmd/agent"
-import { UpgradeCommand } from "./cli/cmd/upgrade"
-import { UninstallCommand } from "./cli/cmd/uninstall"
-import { ModelsCommand } from "./cli/cmd/models"
-import { UI } from "./cli/ui"
-import { Installation } from "./installation"
-import { NamedError } from "@opencode-ai/util/error"
-import { FormatError } from "./cli/error"
-import { ServeCommand } from "./cli/cmd/serve"
-import { WorkspaceServeCommand } from "./cli/cmd/workspace-serve"
-import { Filesystem } from "./util/filesystem"
-import { DebugCommand } from "./cli/cmd/debug"
-import { StatsCommand } from "./cli/cmd/stats"
-import { McpCommand } from "./cli/cmd/mcp"
-import { GithubCommand } from "./cli/cmd/github"
-import { ExportCommand } from "./cli/cmd/export"
-import { ImportCommand } from "./cli/cmd/import"
-import { AttachCommand } from "./cli/cmd/tui/attach"
-import { TuiThreadCommand } from "./cli/cmd/tui/thread"
-import { AcpCommand } from "./cli/cmd/acp"
-import { EOL } from "os"
-import { WebCommand } from "./cli/cmd/web"
-import { PrCommand } from "./cli/cmd/pr"
-import { SessionCommand } from "./cli/cmd/session"
-import { DbCommand } from "./cli/cmd/db"
 import path from "path"
-import { Global } from "./global"
-import { JsonMigration } from "./storage/json-migration"
-import { Database } from "./storage/db"
+import { readdir, readFile } from "fs/promises"
+import { EOL } from "os"
 
-process.on("unhandledRejection", (e) => {
-  Log.Default.error("rejection", {
-    e: e instanceof Error ? e.message : e,
-  })
-})
+const ROOT = path.resolve(import.meta.dir, "../../..")
+const PROBES = [
+  "packages/opencode/node_modules/deepagents",
+  "packages/opencode/node_modules/gitlab-ai-provider",
+  "packages/opencode/node_modules/@babel/core",
+]
+const HEALTH_SKIP = new Set(["completion", "upgrade", "uninstall", "--help", "-h", "--version", "-v"])
+const rawVersion = Reflect.get(globalThis, "MALIBU_VERSION")
+const VERSION = typeof rawVersion === "string" ? rawVersion : "local"
 
-process.on("uncaughtException", (e) => {
-  Log.Default.error("exception", {
-    e: e instanceof Error ? e.message : e,
-  })
-})
-
-let cli = yargs(hideBin(process.argv))
-  .parserConfiguration({ "populate--": true })
-  .scriptName("opencode")
-  .wrap(100)
-  .help("help", "show help")
-  .alias("help", "h")
-  .version("version", "show version number", Installation.VERSION)
-  .alias("version", "v")
-  .option("print-logs", {
-    describe: "print logs to stderr",
-    type: "boolean",
-  })
-  .option("log-level", {
-    describe: "log level",
-    type: "string",
-    choices: ["DEBUG", "INFO", "WARN", "ERROR"],
-  })
-  .middleware(async (opts) => {
-    await Log.init({
-      print: process.argv.includes("--print-logs"),
-      dev: Installation.isLocal(),
-      level: (() => {
-        if (opts.logLevel) return opts.logLevel as Log.Level
-        if (Installation.isLocal()) return "DEBUG"
-        return "INFO"
-      })(),
-    })
-
-    process.env.AGENT = "1"
-    process.env.OPENCODE = "1"
-    process.env.OPENCODE_PID = String(process.pid)
-
-    Log.Default.info("opencode", {
-      version: Installation.VERSION,
-      args: process.argv.slice(2),
-    })
-
-    const marker = path.join(Global.Path.data, "opencode.db")
-    if (!(await Filesystem.exists(marker))) {
-      const tty = process.stderr.isTTY
-      process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
-      const width = 36
-      const orange = "\x1b[38;5;214m"
-      const muted = "\x1b[0;2m"
-      const reset = "\x1b[0m"
-      let last = -1
-      if (tty) process.stderr.write("\x1b[?25l")
-      try {
-        await JsonMigration.run(Database.Client().$client, {
-          progress: (event) => {
-            const percent = Math.floor((event.current / event.total) * 100)
-            if (percent === last && event.current !== event.total) return
-            last = percent
-            if (tty) {
-              const fill = Math.round((percent / 100) * width)
-              const bar = `${"■".repeat(fill)}${"･".repeat(width - fill)}`
-              process.stderr.write(
-                `\r${orange}${bar} ${percent.toString().padStart(3)}%${reset} ${muted}${event.label.padEnd(12)} ${event.current}/${event.total}${reset}`,
-              )
-              if (event.current === event.total) process.stderr.write("\n")
-            } else {
-              process.stderr.write(`sqlite-migration:${percent}${EOL}`)
-            }
-          },
-        })
-      } finally {
-        if (tty) process.stderr.write("\x1b[?25h")
-        else {
-          process.stderr.write(`sqlite-migration:done${EOL}`)
-        }
-      }
-      process.stderr.write("Database migration complete." + EOL)
-    }
-  })
-  .usage("\n" + UI.logo())
-  .completion("completion", "generate shell completion script")
-  .command(AcpCommand)
-  .command(McpCommand)
-  .command(TuiThreadCommand)
-  .command(AttachCommand)
-  .command(RunCommand)
-  .command(GenerateCommand)
-  .command(DebugCommand)
-  .command(ConsoleCommand)
-  .command(ProvidersCommand)
-  .command(AgentCommand)
-  .command(UpgradeCommand)
-  .command(UninstallCommand)
-  .command(ServeCommand)
-  .command(WebCommand)
-  .command(ModelsCommand)
-  .command(StatsCommand)
-  .command(ExportCommand)
-  .command(ImportCommand)
-  .command(GithubCommand)
-  .command(PrCommand)
-  .command(SessionCommand)
-  .command(DbCommand)
-
-if (Installation.isLocal()) {
-  cli = cli.command(WorkspaceServeCommand)
+function shouldCheckHealth(argv: string[]) {
+  if (process.env.MALIBU_SKIP_DEPENDENCY_HEALTH_CHECK === "1") return false
+  return !argv.some((item) => HEALTH_SKIP.has(item))
 }
 
-cli = cli
-  .fail((msg, err) => {
-    if (
-      msg?.startsWith("Unknown argument") ||
-      msg?.startsWith("Not enough non-option arguments") ||
-      msg?.startsWith("Invalid values:")
-    ) {
-      if (err) throw err
-      cli.showHelp("log")
+function detail(error: unknown) {
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
+function parse(version: string) {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)/)
+  if (!match) return
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  }
+}
+
+function mismatch(expected?: string, actual?: string) {
+  if (!expected || !actual) return
+  const exp = parse(expected)
+  const act = parse(actual)
+  if (!exp || !act) {
+    if (expected !== actual) return `Expected Bun ${expected} but found ${actual}.`
+    return
+  }
+  if (exp.major !== act.major || exp.minor !== act.minor) {
+    return `Expected Bun ${expected} but found ${actual}.`
+  }
+  if (act.patch < exp.patch) {
+    return `Expected Bun ${expected} or newer patch release, but found ${actual}.`
+  }
+}
+
+async function pinned() {
+  const pkg = await Bun.file(path.join(ROOT, "package.json")).json().catch(() => ({})) as { packageManager?: string }
+  if (!pkg.packageManager?.startsWith("bun@")) return undefined
+  return pkg.packageManager.slice("bun@".length)
+}
+
+async function probe(dir: string) {
+  await readdir(dir)
+  await readFile(path.join(dir, "package.json"), "utf8")
+}
+
+async function verifyHealth() {
+  const expected = await pinned()
+  const failures = [] as string[]
+  const version = mismatch(expected, Bun.version)
+
+  for (const item of PROBES) {
+    const next = path.resolve(ROOT, item)
+    try {
+      await probe(next)
+    } catch (error) {
+      failures.push(`${item}: ${detail(error)}`)
     }
-    if (err) throw err
-    process.exit(1)
-  })
-  .strict()
+  }
+
+  if (!version && failures.length === 0) return
+  throw new Error(
+    [
+      "Malibu dependency health check failed before tool execution.",
+      ...(version ? [version] : []),
+      ...failures,
+      "",
+      "Recovery:",
+      `1. Use Bun ${expected ?? "from package.json"}.`,
+      "2. Clear the broken Bun install state for this repo.",
+      "3. Reinstall dependencies with Bun.",
+      "4. Rerun the tool smoke tests.",
+    ].join("\n"),
+  )
+}
 
 try {
-  await cli.parse()
+  if (process.argv.slice(2).some((item) => item === "--version" || item === "-v")) {
+    process.stdout.write(VERSION + EOL)
+  } else {
+    if (shouldCheckHealth(process.argv.slice(2))) {
+      await verifyHealth()
+    }
+    const { runCli } = await import("./cli-main")
+    await runCli()
+  }
 } catch (e) {
-  let data: Record<string, any> = {}
-  if (e instanceof NamedError) {
-    const obj = e.toObject()
-    Object.assign(data, {
-      ...obj.data,
-    })
-  }
-
-  if (e instanceof Error) {
-    Object.assign(data, {
-      name: e.name,
-      message: e.message,
-      cause: e.cause?.toString(),
-      stack: e.stack,
-    })
-  }
-
-  if (e instanceof ResolveMessage) {
-    Object.assign(data, {
-      name: e.name,
-      message: e.message,
-      code: e.code,
-      specifier: e.specifier,
-      referrer: e.referrer,
-      position: e.position,
-      importKind: e.importKind,
-    })
-  }
-  Log.Default.error("fatal", data)
-  const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
-    UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
-    process.stderr.write((e instanceof Error ? e.message : String(e)) + EOL)
-  }
+  process.stderr.write((e instanceof Error ? e.message : String(e)) + EOL)
   process.exitCode = 1
 } finally {
   // Some subprocesses don't react properly to SIGTERM and similar signals.
