@@ -20,8 +20,8 @@ describe("LangChainFactory.isStandard", () => {
     "perplexity",
   ] as const
 
-  test.each(KNOWN_PROVIDERS)("returns true for known provider: %s", (providerID) => {
-    expect(LangChainFactory.isStandard(providerID)).toBe(true)
+  test.each([...KNOWN_PROVIDERS])("returns true for known provider: %s", (providerID) => {
+    expect(LangChainFactory.isStandard(providerID as string)).toBe(true)
   })
 
   test("returns false for unknown provider", () => {

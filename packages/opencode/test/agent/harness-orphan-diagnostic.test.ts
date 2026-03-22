@@ -143,6 +143,68 @@ describe("harness-orphan: Bus event pairing", () => {
     })
   })
 
+  test("six parallel ToolStarts all get matching ToolEnds", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const starts = new Set<string>()
+        const ends = new Set<string>()
+
+        const items = [
+          { id: "call_1", tool: "list", args: { path: "/repo" } },
+          { id: "call_2", tool: "read", args: { filePath: "/repo/a.ts" } },
+          { id: "call_3", tool: "read_file", args: { file_path: "/b.ts" } },
+          { id: "call_4", tool: "glob", args: { pattern: "**/*.ts", path: "/repo" } },
+          { id: "call_5", tool: "grep", args: { pattern: "TARGET", path: "/repo" } },
+          { id: "call_6", tool: "execute", args: { command: "echo six" } },
+        ]
+
+        const startUnsub = Bus.subscribe(Harness.Event.ToolStart, (evt) => {
+          starts.add(evt.properties.toolCallId)
+        })
+
+        const endUnsub = Bus.subscribe(Harness.Event.ToolEnd, (evt) => {
+          ends.add(evt.properties.toolCallId)
+        })
+
+        await Promise.all(
+          items.map((item) =>
+            Bus.publish(Harness.Event.ToolStart, {
+              sessionID: "test-session",
+              toolCallId: item.id,
+              tool: item.tool,
+              args: item.args,
+            }),
+          ),
+        )
+
+        await Promise.all(
+          [...items].reverse().map((item) =>
+            Bus.publish(Harness.Event.ToolEnd, {
+              sessionID: "test-session",
+              toolCallId: item.id,
+              tool: item.tool,
+              output: `${item.tool} ok`,
+            }),
+          ),
+        )
+
+        startUnsub()
+        endUnsub()
+
+        const orphaned = [...starts].filter((id) => !ends.has(id))
+        const unmatched = [...ends].filter((id) => !starts.has(id))
+
+        expect(starts.size).toBe(6)
+        expect(ends.size).toBe(6)
+        expect(orphaned).toHaveLength(0)
+        expect(unmatched).toHaveLength(0)
+      },
+    })
+  })
+
   test("ToolEnd with mismatched ID creates orphan scenario", async () => {
     await using tmp = await tmpdir({ git: true })
 

@@ -259,13 +259,11 @@ const STANDARD_PROVIDERS: Record<string, ProviderFactory> = {
 
   async cohere(model, options) {
     const resolved = await resolveProviderAuth(model, "COHERE_API_KEY", options)
-    const maxOutputTokens = options.maxTokens ?? ProviderTransform.maxOutputTokens(model)
 
     return new ChatCohere({
       model: model.id,
       apiKey: resolved.apiKey,
       temperature: options.temperature,
-      maxTokens: maxOutputTokens,
       streaming: options.streaming ?? true,
     })
   },

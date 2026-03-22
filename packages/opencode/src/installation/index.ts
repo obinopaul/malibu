@@ -110,6 +110,7 @@ export namespace Installation {
     root: string
     failures: Array<{ path: string; error: string }>
     version?: string
+    expected?: string
   }) {
     const lines = [
       "Malibu dependency health check failed before tool execution.",

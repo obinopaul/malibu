@@ -756,7 +756,7 @@ export namespace Session {
           for (const msg of msgs) {
             Bus.publish(MessageV2.Event.Removed, {
               sessionID: input.sessionID,
-              messageID: msg.id,
+              messageID: msg.info.id,
             })
           }
         })
