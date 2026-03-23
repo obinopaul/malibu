@@ -1,7 +1,6 @@
 import { PlanExitTool } from "./plan"
 import { QuestionTool } from "./question"
 import { BashTool } from "./bash"
-import { ExecuteTool, EditFileTool, LsTool, ReadFileTool, WriteFileTool } from "./deepagent-filesystem"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
@@ -107,17 +106,12 @@ export namespace ToolRegistry {
       InvalidTool,
       ...(question ? [QuestionTool] : []),
       BashTool,
-      ExecuteTool,
       ListTool,
-      LsTool,
       ReadTool,
-      ReadFileTool,
       GlobTool,
       GrepTool,
       EditTool,
-      EditFileTool,
       WriteTool,
-      WriteFileTool,
       TaskTool,
       WebFetchTool,
       TodoWriteTool,
