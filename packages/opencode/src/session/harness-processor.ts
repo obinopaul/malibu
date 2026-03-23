@@ -2,7 +2,7 @@
  * Harness-Based Processor — bridges the LangGraph harness output back
  * to Malibu's session state management (MessageV2, parts, snapshots).
  *
- * Primary session processor using the DeepAgent harness (createDeepAgent).
+ * Primary session processor using the Malibu harness (createMalibuAgent).
  *
  * Now supports:
  * - Incremental text deltas for TUI streaming
@@ -35,15 +35,24 @@ import { toolMetadataStore, metadataKey, clearSessionMetadata } from "@/tool/lan
 
 const log = Log.create({ service: "harness-processor" })
 
-/** Human-readable titles for DeepAgent built-in tool names */
-const DEEPAGENT_TOOL_TITLES: Record<string, string> = {
+/** Human-readable titles for tool names */
+const TOOL_TITLES: Record<string, string> = {
+  read: "Read",
+  list: "List",
+  write: "Write",
+  edit: "Edit",
+  bash: "Bash",
+  glob: "Glob",
+  grep: "Grep",
+  todowrite: "TodoWrite",
+  todoread: "TodoRead",
+  task: "Task",
+  // Legacy aliases for existing sessions
   read_file: "Read",
   write_file: "Write",
   edit_file: "Edit",
   ls: "List",
-  glob: "Glob",
-  grep: "Grep",
-  task: "Task",
+  execute: "Bash",
   write_todos: "TodoWrite",
 }
 
@@ -348,7 +357,7 @@ export namespace HarnessProcessor {
               status,
               input: args,
               output: p.output,
-              title: meta?.title ?? DEEPAGENT_TOOL_TITLES[match.tool] ?? DEEPAGENT_TOOL_TITLES[p.tool] ?? match.tool,
+              title: meta?.title ?? TOOL_TITLES[match.tool] ?? TOOL_TITLES[p.tool] ?? match.tool,
               metadata: meta?.metadata ?? {},
               time: {
                 start: state?.time?.start ?? Date.now(),
@@ -360,7 +369,7 @@ export namespace HarnessProcessor {
               status,
               input: args,
               error: p.output,
-              title: meta?.title ?? DEEPAGENT_TOOL_TITLES[match.tool] ?? DEEPAGENT_TOOL_TITLES[p.tool] ?? match.tool,
+              title: meta?.title ?? TOOL_TITLES[match.tool] ?? TOOL_TITLES[p.tool] ?? match.tool,
               metadata: meta?.metadata ?? {},
               time: {
                 start: state?.time?.start ?? Date.now(),
