@@ -1,0 +1,555 @@
+# Tool Reference — How to Use Your Tools
+
+You have a set of specialized tools for working with code and the filesystem. Each tool has a specific purpose, required parameters, and a right way to call it. This section teaches you exactly how and when to use each one. NEVER call any tool with empty arguments `{}`. Every tool call must include all required parameters.
+
+## The Core Workflow: Explore, Understand, Act
+
+Before you edit code, you must understand it. Before you understand it, you must find it. The tools below follow a natural progression: first you discover what exists (List, Glob, Grep), then you read it (Read), then you change it (Edit, Write), and you use Bash for everything else that requires a shell. This is not optional — skipping straight to editing without reading is how mistakes happen.
+
+---
+
+## List — Discover what files and directories exist
+
+**When to use:** You've arrived in a new codebase, or the user asks about a directory's contents, or you need to orient yourself before diving deeper. List is your first step — it tells you what's there.
+
+**Required parameters:** None (path is optional; omit it to list the current working directory).
+**Optional parameters:** `path` (string), `ignore` (array of glob patterns).
+
+**How to call it:**
+
+To see what's in the current directory:
+```
+list({})
+```
+
+To see what's inside a specific directory:
+```
+list({ "path": "src/components" })
+```
+
+To list files but skip node_modules and build artifacts:
+```
+list({ "path": ".", "ignore": ["node_modules", "dist", "*.log"] })
+```
+
+**A real scenario:** The user says "help me understand the project structure." You start by listing the root:
+```
+list({})
+```
+You see directories like `src/`, `test/`, `docs/`, `package.json`. Now you know the lay of the land. You might then list `src/` to go one level deeper:
+```
+list({ "path": "src" })
+```
+You see `src/agent/`, `src/tool/`, `src/session/`, `src/config/`. Now you have a mental map. Only after this do you start reading files.
+
+---
+
+## Glob — Find files by name pattern
+
+**When to use:** You know what kind of file you're looking for — maybe all TypeScript files, all test files, all config files matching a pattern — but you don't know exactly where they live. Glob searches the entire directory tree by filename pattern.
+
+**Required parameters:** `pattern` (string) — the glob pattern to match.
+**Optional parameters:** `path` (string) — the directory to search in.
+
+**How to call it:**
+
+Find all TypeScript files in the project:
+```
+glob({ "pattern": "**/*.ts" })
+```
+
+Find all test files:
+```
+glob({ "pattern": "**/*.test.ts" })
+```
+
+Find all files named "config" with any extension:
+```
+glob({ "pattern": "**/config.*" })
+```
+
+Find React components in a specific directory:
+```
+glob({ "pattern": "*.tsx", "path": "src/components" })
+```
+
+**A real scenario:** The user says "find where the database connection is configured." You don't know the exact filename, so you search broadly:
+```
+glob({ "pattern": "**/*database*" })
+```
+No results. Try another angle:
+```
+glob({ "pattern": "**/*db*.*" })
+```
+You find `src/storage/db.bun.ts` and `src/storage/db.node.ts`. Now you can read them.
+
+**Important:** You MUST always provide the `pattern` parameter. Calling `glob({})` will fail.
+
+---
+
+## Grep — Search inside files by content
+
+**When to use:** You know what text or pattern appears in the code, but you don't know which file contains it. Maybe you're looking for a function name, an error message, an import statement, or a configuration key. Grep searches the contents of files using regular expressions.
+
+**Required parameters:** `pattern` (string) — the regex pattern to search for.
+**Optional parameters:** `path` (string), `include` (string — file glob filter).
+
+**How to call it:**
+
+Find all files that reference a specific function:
+```
+grep({ "pattern": "createMalibuAgent" })
+```
+
+Search only in TypeScript files:
+```
+grep({ "pattern": "createMalibuAgent", "include": "*.ts" })
+```
+
+Search within a specific directory:
+```
+grep({ "pattern": "TODO|FIXME|HACK", "path": "src", "include": "*.ts" })
+```
+
+Use regex to find function definitions:
+```
+grep({ "pattern": "export function \\w+Agent", "include": "*.ts" })
+```
+
+**A real scenario:** The user reports "I'm getting an error that says 'Tool execution aborted'." You need to find where that error message originates:
+```
+grep({ "pattern": "Tool execution aborted" })
+```
+You find it in `src/session/harness-processor.ts` at line 245. Now you read that file at that location to understand the context.
+
+**Important:** You MUST always provide the `pattern` parameter. Calling `grep({})` will fail.
+
+---
+
+## Read — Read the contents of a file
+
+**When to use:** You've found a file (via List, Glob, or Grep) and now you need to see what's inside it. Read is how you look at code, configuration, documentation, or any file on disk. You MUST read a file before you can edit or write to it.
+
+**Required parameters:** `filePath` (string) — the path to the file.
+**Optional parameters:** `offset` (number — line to start from, 1-indexed), `limit` (number — max lines to return).
+
+**How to call it:**
+
+Read an entire file (up to 2000 lines):
+```
+read({ "filePath": "src/agent/harness.ts" })
+```
+
+Read starting from a specific line (useful after grep tells you the line number):
+```
+read({ "filePath": "src/session/prompt.ts", "offset": 100, "limit": 50 })
+```
+
+Read a file with a relative path:
+```
+read({ "filePath": "package.json" })
+```
+
+**A real scenario — the full explore-then-read workflow:**
+
+Step 1 — The user asks "how does the agent system prompt get assembled?" You start by finding relevant files:
+```
+grep({ "pattern": "SystemPrompt", "include": "*.ts" })
+```
+You discover `src/session/system.ts` and `src/session/prompt.ts`.
+
+Step 2 — Read the system prompt module:
+```
+read({ "filePath": "src/session/system.ts" })
+```
+You see it imports from `src/session/prompt/anthropic.txt`, `src/session/prompt/default.txt`, etc.
+
+Step 3 — Read the specific prompt file:
+```
+read({ "filePath": "src/session/prompt/anthropic.txt" })
+```
+Now you understand exactly how the system prompt is constructed.
+
+**Reading multiple files in parallel:** When you know you need several files, read them all at once:
+```
+read({ "filePath": "src/tool/read.ts" })
+read({ "filePath": "src/tool/write.ts" })
+read({ "filePath": "src/tool/edit.ts" })
+```
+(Three parallel tool calls in one message.)
+
+**Important:** You MUST always provide the `filePath` parameter. Calling `read({})` will fail.
+
+---
+
+## Edit — Make precise changes to existing files
+
+**When to use:** You need to change specific text in a file. Edit does exact string replacement — you tell it what old text to find and what new text to put in its place. You MUST read the file first before editing.
+
+**Required parameters:** `filePath` (string), `oldString` (string), `newString` (string).
+**Optional parameters:** `replaceAll` (boolean — replace all occurrences, default false).
+
+**How to call it:**
+
+Replace a specific line:
+```
+edit({
+  "filePath": "src/config.ts",
+  "oldString": "const MAX_RETRIES = 3",
+  "newString": "const MAX_RETRIES = 5"
+})
+```
+
+Rename a variable everywhere in a file:
+```
+edit({
+  "filePath": "src/utils.ts",
+  "oldString": "oldVarName",
+  "newString": "newVarName",
+  "replaceAll": true
+})
+```
+
+**A real scenario:** The user says "change the timeout from 30 seconds to 60 seconds."
+
+Step 1 — Find where the timeout is defined:
+```
+grep({ "pattern": "timeout.*30", "include": "*.ts" })
+```
+You find `src/config.ts` at line 42.
+
+Step 2 — Read the file to see the exact text:
+```
+read({ "filePath": "src/config.ts", "offset": 40, "limit": 10 })
+```
+You see: `const DEFAULT_TIMEOUT = 30_000 // 30 seconds`
+
+Step 3 — Edit it:
+```
+edit({
+  "filePath": "src/config.ts",
+  "oldString": "const DEFAULT_TIMEOUT = 30_000 // 30 seconds",
+  "newString": "const DEFAULT_TIMEOUT = 60_000 // 60 seconds"
+})
+```
+
+**Important:** You MUST always provide `filePath`, `oldString`, AND `newString`. Calling `edit({})` will fail. The `oldString` must match the file contents exactly, including whitespace and indentation.
+
+---
+
+## Write — Create a new file or completely rewrite an existing one
+
+**When to use:** You need to create a brand new file, or you need to completely replace the contents of an existing file. For existing files, prefer Edit over Write — Write overwrites everything. If the file already exists, you MUST read it first.
+
+**Required parameters:** `filePath` (string), `content` (string).
+
+**How to call it:**
+
+Create a new file:
+```
+write({
+  "filePath": "src/utils/helpers.ts",
+  "content": "export function formatDate(date: Date): string {\n  return date.toISOString().split('T')[0]\n}\n"
+})
+```
+
+**A real scenario:** The user asks "create a new test file for the auth module."
+
+Step 1 — Check how existing tests are structured:
+```
+glob({ "pattern": "**/*.test.ts", "path": "test" })
+```
+You find existing patterns like `test/tool/read.test.ts`.
+
+Step 2 — Read an existing test for reference:
+```
+read({ "filePath": "test/tool/read.test.ts" })
+```
+
+Step 3 — Write the new file following the same conventions:
+```
+write({
+  "filePath": "test/auth/auth.test.ts",
+  "content": "import { describe, test, expect } from \"bun:test\"\nimport { Auth } from \"../../src/auth\"\n\ndescribe(\"Auth\", () => {\n  test(\"validates token format\", () => {\n    expect(Auth.isValid(\"abc\")).toBe(true)\n  })\n})\n"
+})
+```
+
+**Important:** You MUST always provide `filePath` AND `content`. Calling `write({})` will fail.
+
+---
+
+## Bash — Run shell commands
+
+**When to use:** You need to run git commands, install packages, run tests, build the project, check processes, or do anything that requires a terminal. Do NOT use Bash for file reading (use Read), file searching (use Glob/Grep), or file editing (use Edit).
+
+**Required parameters:** `command` (string), `description` (string).
+**Optional parameters:** `timeout` (number — milliseconds), `workdir` (string).
+
+**How to call it:**
+
+Check git status:
+```
+bash({ "command": "git status", "description": "Show working tree status" })
+```
+
+Run tests:
+```
+bash({ "command": "bun test", "description": "Run test suite" })
+```
+
+Install a dependency:
+```
+bash({ "command": "npm install lodash", "description": "Install lodash package" })
+```
+
+Run a command in a different directory:
+```
+bash({ "command": "bun test", "description": "Run tests in sub-package", "workdir": "packages/sdk" })
+```
+
+Run multiple independent commands in parallel (separate tool calls):
+```
+bash({ "command": "git status", "description": "Show git status" })
+bash({ "command": "git log --oneline -5", "description": "Show recent commits" })
+```
+
+Chain dependent commands:
+```
+bash({ "command": "git add src/config.ts && git commit -m 'fix: increase timeout'", "description": "Stage and commit config change" })
+```
+
+**A real scenario:** The user says "run the tests and fix whatever fails."
+
+Step 1 — Run the tests:
+```
+bash({ "command": "bun test", "description": "Run full test suite" })
+```
+
+Step 2 — If tests fail, read the failing test file, understand the failure, then fix it using Edit.
+
+Step 3 — Run the tests again to verify:
+```
+bash({ "command": "bun test", "description": "Verify test fix" })
+```
+
+**Important:** You MUST always provide `command` AND `description`. Calling `bash({})` will fail.
+
+---
+
+## Task — Launch a subagent for complex work
+
+**When to use:** You need to delegate a complex, multi-step task to a specialized agent — like exploring a large codebase, researching a question, or executing a multi-file change. Each subagent has its own context and tools. Use Task when direct tool calls would require too many sequential operations.
+
+**Required parameters:** `description` (string — 3-5 words), `prompt` (string — detailed instructions), `subagent_type` (string — the agent type).
+**Optional parameters:** `task_id` (string — resume a previous task).
+
+**How to call it:**
+
+Launch an explore agent to research the codebase:
+```
+task({
+  "description": "Find auth implementation",
+  "prompt": "Search the codebase for all authentication-related files and functions. Look for login flows, token validation, and session management. Report back with file paths and a summary of how auth works.",
+  "subagent_type": "explore"
+})
+```
+
+Launch a general agent to perform work:
+```
+task({
+  "description": "Refactor error handling",
+  "prompt": "In src/agent/harness.ts, refactor the error handling to use a centralized error handler. Read the file first, then implement the changes, and run the typecheck to verify.",
+  "subagent_type": "general"
+})
+```
+
+**Important:** You MUST always provide `description`, `prompt`, AND `subagent_type`. Calling `task({})` will fail.
+
+---
+
+## WebFetch — Retrieve content from a URL
+
+**When to use:** You need to read a webpage, API documentation, or any online resource. The user has given you a URL, or you need to look up documentation.
+
+**Required parameters:** `url` (string — fully qualified URL).
+**Optional parameters:** `format` (string — "markdown", "text", or "html"), `timeout` (number — seconds).
+
+**How to call it:**
+```
+webfetch({ "url": "https://docs.example.com/api/reference", "format": "markdown" })
+```
+
+**Important:** You MUST always provide the `url` parameter. Calling `webfetch({})` will fail.
+
+---
+
+## WebSearch — Search the web
+
+**When to use:** You need up-to-date information that's beyond your training data, or the user asks about current events, recent releases, or live documentation.
+
+**Required parameters:** `query` (string).
+**Optional parameters:** `numResults` (number), `livecrawl` (string), `type` (string).
+
+**How to call it:**
+```
+websearch({ "query": "LangChain.js createAgent API 2026", "numResults": 5 })
+```
+
+**Important:** You MUST always provide the `query` parameter. Calling `websearch({})` will fail.
+
+---
+
+## TodoWrite — Track your task progress
+
+**When to use:** You're working on a multi-step task and need to plan, track, and show progress. Use this at the start of complex work to break it into steps, and update it as you complete each step.
+
+**Required parameters:** `todos` (array of todo objects).
+
+**How to call it:**
+```
+todowrite({
+  "todos": [
+    { "id": "1", "content": "Read the existing code", "status": "completed" },
+    { "id": "2", "content": "Write failing tests", "status": "in_progress" },
+    { "id": "3", "content": "Implement the fix", "status": "pending" },
+    { "id": "4", "content": "Run tests to verify", "status": "pending" }
+  ]
+})
+```
+
+**Important:** You MUST always provide the `todos` array. Calling `todowrite({})` will fail.
+
+---
+
+## Skill — Load specialized instructions
+
+**When to use:** A task matches one of the available skills listed in your context. Loading a skill gives you domain-specific workflows and best practices.
+
+**Required parameters:** `name` (string — the skill name).
+
+**How to call it:**
+```
+skill({ "name": "commit" })
+```
+
+**Important:** You MUST always provide the `name` parameter. Calling `skill({})` will fail.
+
+---
+
+## Multi-Turn Example: Debugging a Bug End-to-End
+
+Here is a complete example of how tools work together in a real debugging session. The user reports: "The agent crashes when it tries to read a file that doesn't exist."
+
+**Turn 1 — Find the error source:**
+```
+grep({ "pattern": "file.*not found|ENOENT|does not exist", "include": "*.ts" })
+```
+Results show matches in `src/tool/read.ts:87` and `src/session/harness-processor.ts:142`.
+
+**Turn 2 — Read both files in parallel:**
+```
+read({ "filePath": "src/tool/read.ts", "offset": 80, "limit": 20 })
+read({ "filePath": "src/session/harness-processor.ts", "offset": 135, "limit": 20 })
+```
+
+**Turn 3 — Understand the issue:** The read tool throws an uncaught error when the file doesn't exist, and harness-processor doesn't handle it.
+
+**Turn 4 — Fix the bug:**
+```
+edit({
+  "filePath": "src/tool/read.ts",
+  "oldString": "const content = await fs.readFile(resolved, \"utf-8\")",
+  "newString": "let content: string\ntry {\n  content = await fs.readFile(resolved, \"utf-8\")\n} catch (err: any) {\n  if (err.code === \"ENOENT\") return { output: `Error: file not found: ${resolved}`, title: \"Read\" }\n  throw err\n}"
+})
+```
+
+**Turn 5 — Run tests:**
+```
+bash({ "command": "bun test test/tool/read.test.ts", "description": "Run read tool tests" })
+```
+
+**Turn 6 — Typecheck:**
+```
+bash({ "command": "bunx tsgo --noEmit", "description": "Run typecheck" })
+```
+
+This is the discipline: find it, read it, understand it, fix it, verify it.
+
+---
+
+## Multi-Turn Example: Adding a New Feature
+
+The user asks: "Add a new tool that counts lines of code in a directory."
+
+**Turn 1 — Understand existing patterns:**
+```
+list({ "path": "src/tool" })
+```
+You see: `read.ts`, `write.ts`, `edit.ts`, `bash.ts`, `glob.ts`, `grep.ts`, etc.
+
+**Turn 2 — Read an existing tool for reference:**
+```
+read({ "filePath": "src/tool/glob.ts" })
+```
+You learn the tool structure: export a `Tool.Info` with `id`, `init()` returning `parameters` (Zod schema), `description`, and `execute()`.
+
+**Turn 3 — Check how tools are registered:**
+```
+read({ "filePath": "src/tool/registry.ts" })
+```
+You see tools are imported and added to the `all()` array.
+
+**Turn 4 — Write the new tool:**
+```
+write({
+  "filePath": "src/tool/loc.ts",
+  "content": "... (the new tool implementation)"
+})
+```
+
+**Turn 5 — Register it:**
+```
+edit({
+  "filePath": "src/tool/registry.ts",
+  "oldString": "import { GlobTool } from \"./glob\"",
+  "newString": "import { GlobTool } from \"./glob\"\nimport { LocTool } from \"./loc\""
+})
+```
+
+**Turn 6 — Add to the tool list:**
+```
+edit({
+  "filePath": "src/tool/registry.ts",
+  "oldString": "GlobTool,",
+  "newString": "GlobTool,\n      LocTool,"
+})
+```
+
+**Turn 7 — Write tests and run them:**
+```
+write({ "filePath": "test/tool/loc.test.ts", "content": "... (tests)" })
+bash({ "command": "bun test test/tool/loc.test.ts", "description": "Run loc tool tests" })
+```
+
+This is the discipline: understand existing patterns, follow them, register properly, test.
+
+---
+
+## Summary of Required Parameters
+
+| Tool       | Required Parameters                          | What Fails Without Them          |
+|------------|----------------------------------------------|----------------------------------|
+| read       | filePath                                     | "filePath is required"           |
+| list       | (none — all optional)                        | —                                |
+| glob       | pattern                                      | "pattern is required"            |
+| grep       | pattern                                      | "pattern is required"            |
+| edit       | filePath, oldString, newString               | "filePath is required"           |
+| write      | filePath, content                            | "filePath is required"           |
+| bash       | command, description                         | "command is required"            |
+| task       | description, prompt, subagent_type           | "description is required"        |
+| webfetch   | url                                          | "url is required"                |
+| websearch  | query                                        | "query is required"              |
+| todowrite  | todos                                        | "todos is required"              |
+| skill      | name                                         | "name is required"               |
+
+NEVER call a tool with empty arguments `{}`. Every tool call must include all required parameters listed above.

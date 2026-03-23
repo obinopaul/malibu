@@ -9,12 +9,13 @@
  * Middleware assembled (in order):
  * 1. todoListMiddleware — task tracking
  * 2. createSubAgentMiddleware — sub-agent delegation (explore, general)
- * 3. createSummarizationMiddleware — context window management
- * 4. createPatchToolCallsMiddleware — cross-provider tool compat
- * 5. createSkillsMiddleware — skills from .agents/skills/ (conditional)
- * 6. anthropicPromptCachingMiddleware — Anthropic cache (conditional)
- * 7. cacheBreakpointMiddleware — cache breakpoint (conditional, Anthropic)
- * 8. user custom middleware
+ * 3. createBackgroundSubAgentMiddleware — fire-and-forget background tasks (conditional)
+ * 4. createSummarizationMiddleware — context window management
+ * 5. createPatchToolCallsMiddleware — cross-provider tool compat
+ * 6. createSkillsMiddleware — skills from .agents/skills/ (conditional)
+ * 7. anthropicPromptCachingMiddleware — Anthropic cache (conditional)
+ * 8. cacheBreakpointMiddleware — cache breakpoint (conditional, Anthropic)
+ * 9. user custom middleware
  */
 // tsgo resolves langchain via the "browser" customCondition which lacks agent exports.
 // Bun resolves via "input" condition (source .ts) which has all exports. Safe at runtime.
@@ -32,6 +33,10 @@ import {
   LocalShellBackend,
 } from "deepagents"
 import type { SubAgent } from "deepagents"
+import {
+  createBackgroundSubAgentMiddleware,
+  BackgroundTaskRegistry,
+} from "./background-subagents"
 
 import { Log } from "../util/log"
 
@@ -89,6 +94,14 @@ export interface CreateMalibuAgentParams {
   middleware?: AgentMiddleware[]
   /** Whether to detect Anthropic model for prompt caching */
   isAnthropicModel?: boolean
+  /** Enable background subagent middleware (fire-and-forget in-process tasks). Default: true */
+  enableBackgroundTasks?: boolean
+}
+
+export interface CreateMalibuAgentResult {
+  agent: ReturnType<typeof createAgent>
+  /** Registry for tracking background tasks. Only present when enableBackgroundTasks is true. */
+  backgroundTaskRegistry?: BackgroundTaskRegistry
 }
 
 /**
@@ -97,7 +110,7 @@ export interface CreateMalibuAgentParams {
  * Unlike createDeepAgent, this does NOT include filesystem middleware,
  * so no duplicate filesystem tools or conflicting system prompts are injected.
  */
-export function createMalibuAgent(params: CreateMalibuAgentParams) {
+export function createMalibuAgent(params: CreateMalibuAgentParams): CreateMalibuAgentResult {
   const {
     model,
     tools,
@@ -109,6 +122,7 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
     name,
     middleware: customMiddleware = [],
     isAnthropicModel = false,
+    enableBackgroundTasks = true,
   } = params
 
   // --- Subagent middleware (passed to createSubAgentMiddleware for subagent-internal use) ---
@@ -139,6 +153,26 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
       ]
     : []
 
+  // --- Background subagent middleware (conditional) ---
+  let backgroundTaskRegistry: BackgroundTaskRegistry | undefined
+  const backgroundMiddleware: AgentMiddleware[] = []
+  if (enableBackgroundTasks) {
+    const { middleware: bgMiddleware, registry } = createBackgroundSubAgentMiddleware({
+      defaultModel: model,
+      defaultTools: tools,
+      defaultMiddleware: [...subagentMiddleware, ...anthropicMiddleware],
+      generalPurposeMiddleware: [
+        ...subagentMiddleware,
+        ...skillsMiddlewareArray,
+        ...anthropicMiddleware,
+      ],
+      subagents,
+      generalPurposeAgent: true,
+    })
+    backgroundMiddleware.push(bgMiddleware)
+    backgroundTaskRegistry = registry
+  }
+
   // --- Built-in middleware (NO filesystem middleware from deepagents) ---
   const builtInMiddleware: AgentMiddleware[] = [
     // 1. Todo list management
@@ -156,9 +190,11 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
       subagents,
       generalPurposeAgent: true,
     } as any),
-    // 3. Context summarization
+    // 3. Background subagent tasks (fire-and-forget in-process)
+    ...backgroundMiddleware,
+    // 4. Context summarization
     createSummarizationMiddleware({ model, backend }),
-    // 4. Cross-provider tool call compatibility
+    // 5. Cross-provider tool call compatibility
     createPatchToolCallsMiddleware(),
   ]
 
@@ -173,6 +209,7 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
   log.info("createMalibuAgent: assembled middleware", {
     total: runtimeMiddleware.length,
     hasSkills: skillsMiddlewareArray.length > 0,
+    hasBackgroundTasks: enableBackgroundTasks,
     isAnthropic: isAnthropicModel,
     subagentCount: subagents.length,
     toolCount: tools.length,
@@ -191,5 +228,5 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
     metadata: { ls_integration: "malibu" },
   })
 
-  return agent
+  return { agent, backgroundTaskRegistry }
 }

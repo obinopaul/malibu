@@ -9,6 +9,7 @@ import PROMPT_GEMINI from "./prompt/gemini.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import PROMPT_TOOL_REFERENCE from "./prompt/tool-reference.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
@@ -16,12 +17,21 @@ import { Skill } from "@/skill"
 
 export namespace SystemPrompt {
   export function provider(model: Provider.Model) {
-    if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
+    const id = model.api.id.toLowerCase()
+    // OpenAI flagship models: GPT-5.x, GPT-4, o1, o3, o4 series
+    if (
+      id.includes("gpt-5") ||
+      id.includes("gpt-4") ||
+      id.includes("o1") ||
+      id.includes("o3") ||
+      id.includes("o4")
+    )
       return [PROMPT_BEAST]
-    if (model.api.id.includes("gpt")) return [PROMPT_CODEX]
-    if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
-    if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
-    if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY]
+    // OpenAI smaller/older models: GPT-3.5, etc.
+    if (id.includes("gpt")) return [PROMPT_CODEX]
+    if (id.includes("gemini")) return [PROMPT_GEMINI]
+    if (id.includes("claude")) return [PROMPT_ANTHROPIC]
+    if (id.includes("trinity")) return [PROMPT_TRINITY]
     return [PROMPT_DEFAULT]
   }
 
@@ -50,6 +60,10 @@ export namespace SystemPrompt {
         `</directories>`,
       ].join("\n"),
     ]
+  }
+
+  export function toolReference() {
+    return PROMPT_TOOL_REFERENCE
   }
 
   export async function skills(agent: Agent.Info) {

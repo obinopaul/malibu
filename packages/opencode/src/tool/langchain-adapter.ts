@@ -214,7 +214,7 @@ export async function toLangChainTool(
   })
 
   const orig = tool.call.bind(tool)
-  tool.call = async (arg: any, configArg?: any, tags?: string[]) => {
+  ;(tool as any).call = async (arg: any, configArg?: any, tags?: string[]) => {
     try {
       return await orig(arg, configArg, tags)
     } catch (error) {

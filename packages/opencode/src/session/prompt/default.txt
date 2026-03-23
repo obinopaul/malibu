@@ -4,7 +4,7 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 
 If the user asks for help or wants to give feedback inform them of the following:
 - /help: Get help with using malibu
-- To give feedback, users should report the issue at https://github.com/anomalyco/malibu/issues
+- To give feedback, users should report the issue at https://github.com/obinopaul/malibu/issues
 
 When the user directly asks about malibu (eg 'can malibu do...', 'does malibu have...') or asks in second person (eg 'are you able...', 'can you do...'), first use the WebFetch tool to gather information to answer the question from malibu docs at https://malibu.ai
 

@@ -281,7 +281,7 @@ export namespace Harness {
       || config.model.providerID === "anthropic-vertex"
       || config.model.id?.includes("claude")
 
-    const agent = createMalibuAgent({
+    const { agent } = createMalibuAgent({
       model: built.chatModel,
       tools: built.langchainTools,
       systemPrompt: built.systemPrompt,

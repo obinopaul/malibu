@@ -72,6 +72,8 @@ export namespace LLM {
       [
         // use agent prompt otherwise provider prompt
         ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+        // tool reference — teaches the model how to call each tool with correct parameters
+        SystemPrompt.toolReference(),
         // any custom prompt passed into this call
         ...input.system,
         // any custom prompt from last user message

@@ -1729,7 +1729,10 @@ function InlineTool(props: {
         </Match>
         <Match when={true}>
           <text paddingLeft={3} fg={fg()} attributes={denied() ? TextAttributes.STRIKETHROUGH : undefined}>
-            <Show fallback={<>~ {props.pending}</>} when={props.complete}>
+            <Show
+              fallback={<>~ {props.complete ? props.children : props.pending}</>}
+              when={props.part.state.status === "completed" || props.part.state.status === "error"}
+            >
               <span style={{ fg: props.iconColor }}>{props.icon}</span> {props.children}
             </Show>
           </text>
