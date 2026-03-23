@@ -53,30 +53,6 @@ describe("tool-standalone: individual tool execution", () => {
     })
   })
 
-  test("ls compatibility tool treats '/' as the worktree root", async () => {
-    await using tmp = await tmpdir({
-      git: true,
-      init: async (dir) => {
-        await fs.writeFile(path.join(dir, "root.txt"), "hello")
-      },
-    })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const tools = await ToolRegistry.all()
-        const lsTool = tools.find((t) => t.id === "ls")
-        expect(lsTool).toBeTruthy()
-
-        const initialized = await lsTool!.init({})
-        const result = await initialized.execute({ path: "/" }, makeMockContext())
-
-        expect(result.output).toContain("root.txt")
-        expect(result.output).toContain(tmp.path)
-      },
-    })
-  })
-
   test("bash tool executes simple command", async () => {
     await using tmp = await tmpdir({ git: true })
 
@@ -336,33 +312,6 @@ describe("tool-standalone: individual tool execution", () => {
     })
   })
 
-  test("read_file compatibility tool converts zero-index offsets", async () => {
-    await using tmp = await tmpdir({
-      git: true,
-      init: async (dir) => {
-        await fs.writeFile(path.join(dir, "offset.txt"), "line-1\nline-2\nline-3\n")
-      },
-    })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const tools = await ToolRegistry.all()
-        const readTool = tools.find((t) => t.id === "read_file")
-        expect(readTool).toBeTruthy()
-
-        const initialized = await readTool!.init({})
-        const result = await initialized.execute(
-          { file_path: "/offset.txt", offset: 1, limit: 1 },
-          makeMockContext(),
-        )
-
-        expect(result.output).toContain("2: line-2")
-        expect(result.output).not.toContain("1: line-1")
-      },
-    })
-  })
-
   test("grep tool accepts DeepAgent glob alias", async () => {
     await using tmp = await tmpdir({
       git: true,
@@ -391,112 +340,9 @@ describe("tool-standalone: individual tool execution", () => {
     })
   })
 
-  test("write_file compatibility tool writes beneath the worktree root", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const tools = await ToolRegistry.all()
-        const writeTool = tools.find((t) => t.id === "write_file")
-        expect(writeTool).toBeTruthy()
-
-        const initialized = await writeTool!.init({})
-        await initialized.execute(
-          { file_path: "/compat.txt", content: "compat write" },
-          makeMockContext(),
-        )
-
-        const written = await fs.readFile(path.join(tmp.path, "compat.txt"), "utf-8")
-        expect(written).toBe("compat write")
-      },
-    })
-  })
-
-  test("edit_file compatibility tool delegates to Malibu edit", async () => {
-    await using tmp = await tmpdir({
-      git: true,
-      init: async (dir) => {
-        await fs.writeFile(path.join(dir, "compat-edit.txt"), "before edit")
-      },
-    })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const tools = await ToolRegistry.all()
-        const readTool = tools.find((t) => t.id === "read_file")!
-        const editTool = tools.find((t) => t.id === "edit_file")!
-        const ctx = makeMockContext()
-
-        await (await readTool.init({})).execute({ file_path: "/compat-edit.txt" }, ctx)
-        await (await editTool.init({})).execute(
-          {
-            file_path: "/compat-edit.txt",
-            old_string: "before",
-            new_string: "after",
-          },
-          ctx,
-        )
-
-        const edited = await fs.readFile(path.join(tmp.path, "compat-edit.txt"), "utf-8")
-        expect(edited).toBe("after edit")
-      },
-    })
-  })
-
-  test("execute compatibility tool uses the bash implementation", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const tools = await ToolRegistry.all()
-        const executeTool = tools.find((t) => t.id === "execute")
-        expect(executeTool).toBeTruthy()
-
-        const initialized = await executeTool!.init({})
-        const result = await initialized.execute({ command: "echo compat-ok" }, makeMockContext())
-
-        expect(result.output).toContain("compat-ok")
-        expect(result.title).toBe("Run shell command")
-      },
-    })
-  })
 })
 
 describe("tool-standalone: parallel tool execution", () => {
-  test("multiple read_file compatibility calls run in parallel", async () => {
-    await using tmp = await tmpdir({
-      git: true,
-      init: async (dir) => {
-        await fs.writeFile(path.join(dir, "a.txt"), "content-a")
-        await fs.writeFile(path.join(dir, "b.txt"), "content-b")
-        await fs.writeFile(path.join(dir, "c.txt"), "content-c")
-      },
-    })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const tools = await ToolRegistry.all()
-        const readTool = tools.find((t) => t.id === "read_file")!
-        const initialized = await readTool.init({})
-        const ctx = makeMockContext()
-
-        const results = await Promise.all([
-          initialized.execute({ file_path: "/a.txt" }, ctx),
-          initialized.execute({ file_path: "/b.txt" }, ctx),
-          initialized.execute({ file_path: "/c.txt" }, ctx),
-        ])
-
-        expect(results[0].output).toContain("content-a")
-        expect(results[1].output).toContain("content-b")
-        expect(results[2].output).toContain("content-c")
-      },
-    })
-  })
-
   test("multiple reads in parallel", async () => {
     await using tmp = await tmpdir({
       git: true,

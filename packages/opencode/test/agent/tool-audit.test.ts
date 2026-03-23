@@ -18,19 +18,15 @@ const STATUS = {
   batch: "conditional",
   codesearch: "registered",
   edit: "registered",
-  edit_file: "registered",
-  execute: "registered",
   glob: "registered",
   grep: "registered",
   invalid: "registered",
   list: "registered",
-  ls: "registered",
   lsp: "conditional",
   multiedit: "unexposed",
   plan_exit: "conditional",
   question: "conditional",
   read: "registered",
-  read_file: "registered",
   skill: "registered",
   task: "registered",
   todoread: "unexposed",
@@ -38,7 +34,6 @@ const STATUS = {
   webfetch: "registered",
   websearch: "registered",
   write: "registered",
-  write_file: "registered",
 } as const
 
 const EXTRA_UNEXPOSED = new Set([
@@ -100,11 +95,15 @@ describe("tool-audit: Malibu vs DeepAgent tool integration", () => {
         }
 
         expect(allIds).toContain("list")
-        expect(allIds).toContain("ls")
-        expect(allIds).toContain("read_file")
-        expect(allIds).toContain("write_file")
-        expect(allIds).toContain("edit_file")
-        expect(allIds).toContain("execute")
+        expect(allIds).toContain("read")
+        expect(allIds).toContain("write")
+        expect(allIds).toContain("edit")
+        expect(allIds).toContain("bash")
+        expect(allIds).not.toContain("ls")
+        expect(allIds).not.toContain("read_file")
+        expect(allIds).not.toContain("write_file")
+        expect(allIds).not.toContain("edit_file")
+        expect(allIds).not.toContain("execute")
       },
     })
   })

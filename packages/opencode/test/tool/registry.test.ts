@@ -10,7 +10,7 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
-  test("registers list and DeepAgent compatibility tools", async () => {
+  test("registers native Malibu tools (no wrapper tools)", async () => {
     await using tmp = await tmpdir({ git: true })
 
     await Instance.provide({
@@ -18,11 +18,17 @@ describe("tool.registry", () => {
       fn: async () => {
         const ids = await ToolRegistry.ids()
         expect(ids).toContain("list")
-        expect(ids).toContain("ls")
-        expect(ids).toContain("read_file")
-        expect(ids).toContain("write_file")
-        expect(ids).toContain("edit_file")
-        expect(ids).toContain("execute")
+        expect(ids).toContain("read")
+        expect(ids).toContain("write")
+        expect(ids).toContain("edit")
+        expect(ids).toContain("bash")
+        expect(ids).toContain("glob")
+        expect(ids).toContain("grep")
+        expect(ids).not.toContain("ls")
+        expect(ids).not.toContain("read_file")
+        expect(ids).not.toContain("write_file")
+        expect(ids).not.toContain("edit_file")
+        expect(ids).not.toContain("execute")
       },
     })
   })

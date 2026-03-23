@@ -94,31 +94,32 @@ describe("tool.batch", () => {
           {
             tool_calls: [
               { tool: "list", parameters: { path: tmp.path } },
-              { tool: "ls", parameters: { path: "/" } },
               { tool: "read", parameters: { filePath: path.join(tmp.path, "a.txt") } },
-              { tool: "read_file", parameters: { file_path: "/b.txt" } },
+              { tool: "read", parameters: { filePath: path.join(tmp.path, "b.txt") } },
               { tool: "glob", parameters: { pattern: "**/*.ts", path: tmp.path } },
               { tool: "grep", parameters: { pattern: "TARGET", path: tmp.path } },
-              { tool: "execute", parameters: { command: "echo batch-ok" } },
+              { tool: "bash", parameters: { command: "echo batch-ok", description: "test" } },
             ],
           },
           ctx({ sessionID: ses.id, messageID: out.id }),
         )
 
-        expect(result.output).toContain("All 7 tools executed successfully")
-        expect(result.metadata.totalCalls).toBe(7)
-        expect(result.metadata.successful).toBe(7)
+        expect(result.output).toContain("All 6 tools executed successfully")
+        expect(result.metadata.totalCalls).toBe(6)
+        expect(result.metadata.successful).toBe(6)
         expect(result.metadata.failed).toBe(0)
 
         const parts = (await MessageV2.parts(out.id)).filter((part): part is MessageV2.ToolPart => part.type === "tool")
-        expect(parts).toHaveLength(7)
+        expect(parts).toHaveLength(6)
         expect(parts.every((part) => part.state.status === "completed")).toBe(true)
 
-        const map = new Map(parts.map((part) => [part.tool, part]))
-        expect((map.get("read")?.state as MessageV2.ToolStateCompleted).output).toContain("alpha")
-        expect((map.get("read_file")?.state as MessageV2.ToolStateCompleted).output).toContain("beta")
-        expect((map.get("grep")?.state as MessageV2.ToolStateCompleted).output).toContain("TARGET")
-        expect((map.get("execute")?.state as MessageV2.ToolStateCompleted).output).toContain("batch-ok")
+        const readParts = parts.filter((part) => part.tool === "read")
+        expect(readParts.some((p) => (p.state as MessageV2.ToolStateCompleted).output.includes("alpha"))).toBe(true)
+        expect(readParts.some((p) => (p.state as MessageV2.ToolStateCompleted).output.includes("beta"))).toBe(true)
+        const grepPart = parts.find((part) => part.tool === "grep")
+        expect((grepPart?.state as MessageV2.ToolStateCompleted).output).toContain("TARGET")
+        const bashPart = parts.find((part) => part.tool === "bash")
+        expect((bashPart?.state as MessageV2.ToolStateCompleted).output).toContain("batch-ok")
 
         await Session.remove(ses.id)
       },
@@ -150,10 +151,10 @@ describe("tool.batch", () => {
           {
             tool_calls: [
               { tool: "list", parameters: { path: tmp.path } },
-              { tool: "read_file", parameters: { file_path: "/b.txt" } },
+              { tool: "read", parameters: { filePath: path.join(tmp.path, "b.txt") } },
               { tool: "glob", parameters: { pattern: "**/*.ts", path: tmp.path } },
               { tool: "grep", parameters: { pattern: "TARGET", path: tmp.path } },
-              { tool: "execute", parameters: { command: "echo batch-mixed" } },
+              { tool: "bash", parameters: { command: "echo batch-mixed", description: "test" } },
               { tool: "read", parameters: {} },
             ],
           },

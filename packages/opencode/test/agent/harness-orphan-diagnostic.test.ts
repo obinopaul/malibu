@@ -45,14 +45,14 @@ describe("harness-orphan: Bus event pairing", () => {
         await Bus.publish(Harness.Event.ToolStart, {
           sessionID: "test-session",
           toolCallId: "call_001",
-          tool: "read_file",
-          args: { file_path: "/test.txt" },
+          tool: "read",
+          args: { filePath: "/test.txt" },
         })
 
         await Bus.publish(Harness.Event.ToolEnd, {
           sessionID: "test-session",
           toolCallId: "call_001",
-          tool: "read_file",
+          tool: "read",
           output: "file contents",
         })
 
@@ -90,20 +90,20 @@ describe("harness-orphan: Bus event pairing", () => {
           Bus.publish(Harness.Event.ToolStart, {
             sessionID: "test-session",
             toolCallId: "call_A",
-            tool: "ls",
+            tool: "list",
             args: {},
           }),
           Bus.publish(Harness.Event.ToolStart, {
             sessionID: "test-session",
             toolCallId: "call_B",
-            tool: "read_file",
-            args: { file_path: "/a.txt" },
+            tool: "read",
+            args: { filePath: "/a.txt" },
           }),
           Bus.publish(Harness.Event.ToolStart, {
             sessionID: "test-session",
             toolCallId: "call_C",
-            tool: "read_file",
-            args: { file_path: "/b.txt" },
+            tool: "read",
+            args: { filePath: "/b.txt" },
           }),
         ])
 
@@ -112,19 +112,19 @@ describe("harness-orphan: Bus event pairing", () => {
           Bus.publish(Harness.Event.ToolEnd, {
             sessionID: "test-session",
             toolCallId: "call_C",
-            tool: "read_file",
+            tool: "read",
             output: "content-b",
           }),
           Bus.publish(Harness.Event.ToolEnd, {
             sessionID: "test-session",
             toolCallId: "call_A",
-            tool: "ls",
+            tool: "list",
             output: "dir listing",
           }),
           Bus.publish(Harness.Event.ToolEnd, {
             sessionID: "test-session",
             toolCallId: "call_B",
-            tool: "read_file",
+            tool: "read",
             output: "content-a",
           }),
         ])
@@ -155,10 +155,10 @@ describe("harness-orphan: Bus event pairing", () => {
         const items = [
           { id: "call_1", tool: "list", args: { path: "/repo" } },
           { id: "call_2", tool: "read", args: { filePath: "/repo/a.ts" } },
-          { id: "call_3", tool: "read_file", args: { file_path: "/b.ts" } },
+          { id: "call_3", tool: "read", args: { filePath: "/b.ts" } },
           { id: "call_4", tool: "glob", args: { pattern: "**/*.ts", path: "/repo" } },
           { id: "call_5", tool: "grep", args: { pattern: "TARGET", path: "/repo" } },
-          { id: "call_6", tool: "execute", args: { command: "echo six" } },
+          { id: "call_6", tool: "bash", args: { command: "echo six" } },
         ]
 
         const startUnsub = Bus.subscribe(Harness.Event.ToolStart, (evt) => {
@@ -228,15 +228,15 @@ describe("harness-orphan: Bus event pairing", () => {
         await Bus.publish(Harness.Event.ToolStart, {
           sessionID: "test-session",
           toolCallId: "call_001",
-          tool: "read_file",
-          args: { file_path: "/test.txt" },
+          tool: "read",
+          args: { filePath: "/test.txt" },
         })
 
         // End with DIFFERENT ID "toolu_001" (simulating provider ID format mismatch)
         await Bus.publish(Harness.Event.ToolEnd, {
           sessionID: "test-session",
           toolCallId: "toolu_001",
-          tool: "read_file",
+          tool: "read",
           output: "file contents",
         })
 
