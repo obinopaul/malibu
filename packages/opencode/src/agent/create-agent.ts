@@ -36,6 +36,7 @@ import type { SubAgent } from "deepagents"
 import {
   createBackgroundSubAgentMiddleware,
   BackgroundTaskRegistry,
+  type BackgroundSubAgent,
 } from "./background-subagents"
 
 import { Log } from "../util/log"
@@ -99,7 +100,8 @@ export interface CreateMalibuAgentParams {
 }
 
 export interface CreateMalibuAgentResult {
-  agent: ReturnType<typeof createAgent>
+  /** The compiled LangGraph agent (ReactAgent). Typed as `any` because createAgent is imported via @ts-expect-error. */
+  agent: any
   /** Registry for tracking background tasks. Only present when enableBackgroundTasks is true. */
   backgroundTaskRegistry?: BackgroundTaskRegistry
 }
@@ -160,13 +162,12 @@ export function createMalibuAgent(params: CreateMalibuAgentParams): CreateMalibu
     const { middleware: bgMiddleware, registry } = createBackgroundSubAgentMiddleware({
       defaultModel: model,
       defaultTools: tools,
-      defaultMiddleware: [...subagentMiddleware, ...anthropicMiddleware],
-      generalPurposeMiddleware: [
+      defaultMiddleware: [
         ...subagentMiddleware,
         ...skillsMiddlewareArray,
         ...anthropicMiddleware,
       ],
-      subagents,
+      subagents: subagents as BackgroundSubAgent[],
       generalPurposeAgent: true,
     })
     backgroundMiddleware.push(bgMiddleware)

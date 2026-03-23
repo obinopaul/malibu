@@ -97,9 +97,9 @@ export function backgroundTasksReducer(
 
 const BackgroundTaskStateSchema = new StateSchema({
   backgroundTasks: new ReducedValue(
-    z.record(z.string(), BackgroundTaskRecordSchema).default(() => ({})),
+    z.record(z.string(), BackgroundTaskRecordSchema).default(() => ({})) as any,
     {
-      inputSchema: z.record(z.string(), BackgroundTaskRecordSchema).optional(),
+      inputSchema: z.record(z.string(), BackgroundTaskRecordSchema).optional() as any,
       reducer: backgroundTasksReducer,
     },
   ),
@@ -437,7 +437,7 @@ export interface BackgroundSubAgent {
   /** Override tools for this subagent (falls back to defaultTools). */
   tools?: StructuredTool[]
   /** Override middleware for this subagent. */
-  middleware?: AgentMiddleware[]
+  middleware?: readonly AgentMiddleware[]
 }
 
 /**

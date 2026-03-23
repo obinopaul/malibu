@@ -281,7 +281,7 @@ export namespace Harness {
       || config.model.providerID === "anthropic-vertex"
       || config.model.id?.includes("claude")
 
-    const { agent } = createMalibuAgent({
+    const malibuResult = createMalibuAgent({
       model: built.chatModel,
       tools: built.langchainTools,
       systemPrompt: built.systemPrompt,
@@ -292,6 +292,7 @@ export namespace Harness {
       name: config.agent.name,
       isAnthropicModel,
     })
+    const agent: any = malibuResult.agent
 
     const langchainMessages = convertMessages(config.messages)
     const threadId = `${config.sessionID}-${config.messageID}`
@@ -378,6 +379,7 @@ export namespace Harness {
     let tokenUsage: TokenUsage = { prompt: 0, completion: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
 
     try {
+      // @ts-expect-error — tsgo incorrectly infers CreateMalibuAgentResult instead of destructured `any` agent
       const stream = await agent.stream(input, {
         ...graphConfig,
         streamMode: "messages",
