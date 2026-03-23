@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://opencode.ai">
+  <a href="https://malibu.ai">
     <picture>
       <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
       <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
@@ -9,7 +9,7 @@
 </p>
 <p align="center">The open source AI coding agent.</p>
 <p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
+  <a href="https://malibu.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/malibu-ai"><img alt="npm" src="https://img.shields.io/npm/v/malibu-ai?style=flat-square" /></a>
   <a href="https://github.com/anomalyco/malibu/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/malibu/publish.yml?style=flat-square&branch=dev" /></a>
 </p>
@@ -39,7 +39,7 @@
   <a href="README.vi.md">Tiếng Việt</a>
 </p>
 
-[![Malibu Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+[![Malibu Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://malibu.ai)
 
 ---
 
@@ -47,18 +47,18 @@
 
 ```bash
 # YOLO
-curl -fsSL https://opencode.ai/install | bash
+curl -fsSL https://malibu.ai/install | bash
 
 # Package managers
-npm i -g malibu-ai@latest        # or bun/pnpm/yarn
-scoop install malibu             # Windows
-choco install malibu             # Windows
-brew install anomalyco/tap/malibu # macOS and Linux (recommended, always up to date)
-brew install malibu              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S malibu            # Arch Linux (Stable)
-paru -S malibu-bin               # Arch Linux (Latest from AUR)
-mise use -g malibu               # Any OS
-nix run nixpkgs#malibu           # or github:anomalyco/malibu for latest dev branch
+npm i -g malibu-ai@latest          # or bun/pnpm/yarn
+scoop install malibu               # Windows
+choco install malibu               # Windows
+brew install anomalyco/tap/malibu  # macOS and Linux (recommended, always up to date)
+brew install malibu                # macOS and Linux (official brew formula, updated less)
+sudo pacman -S malibu              # Arch Linux (Stable)
+paru -S malibu-bin                 # Arch Linux (Latest from AUR)
+mise use -g malibu                 # Any OS
+nix run nixpkgs#malibu             # or github:anomalyco/malibu for latest dev branch
 ```
 
 > [!TIP]
@@ -66,13 +66,13 @@ nix run nixpkgs#malibu           # or github:anomalyco/malibu for latest dev bra
 
 ### Desktop App (BETA)
 
-Malibu is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/malibu/releases) or [opencode.ai/download](https://opencode.ai/download).
+Malibu is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/malibu/releases) or [malibu.ai/download](https://malibu.ai/download).
 
 | Platform              | Download                              |
 | --------------------- | ------------------------------------- |
-| macOS (Apple Silicon) | `malibu-desktop-darwin-aarch64.dmg` |
-| macOS (Intel)         | `malibu-desktop-darwin-x64.dmg`     |
-| Windows               | `malibu-desktop-windows-x64.exe`    |
+| macOS (Apple Silicon) | `malibu-desktop-darwin-aarch64.dmg`   |
+| macOS (Intel)         | `malibu-desktop-darwin-x64.dmg`       |
+| Windows               | `malibu-desktop-windows-x64.exe`      |
 | Linux                 | `.deb`, `.rpm`, or AppImage           |
 
 ```bash
@@ -93,8 +93,8 @@ The install script respects the following priority order for the installation pa
 
 ```bash
 # Examples
-MALIBU_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
+MALIBU_INSTALL_DIR=/usr/local/bin curl -fsSL https://malibu.ai/install | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://malibu.ai/install | bash
 ```
 
 ### Agents
@@ -110,11 +110,11 @@ Malibu includes two built-in agents you can switch between with the `Tab` key.
 Also included is a **general** subagent for complex searches and multistep tasks.
 This is used internally and can be invoked using `@general` in messages.
 
-Learn more about [agents](https://opencode.ai/docs/agents).
+Learn more about [agents](https://malibu.ai/docs/agents).
 
 ### Documentation
 
-For more info on how to configure Malibu, [**head over to our docs**](https://opencode.ai/docs).
+For more info on how to configure Malibu, [**head over to our docs**](https://malibu.ai/docs).
 
 ### Contributing
 
@@ -131,7 +131,7 @@ If you are working on a project that's related to Malibu and is using "malibu" a
 It's very similar to Claude Code in terms of capability. Here are the key differences:
 
 - 100% open source
-- Not coupled to any provider. Although we recommend the models we provide through [Malibu Zen](https://opencode.ai/zen), Malibu can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
+- Not coupled to any provider. Although we recommend the models we provide through [Malibu Zen](https://malibu.ai/zen), Malibu can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
 - Out-of-the-box LSP support
 - A focus on TUI. Malibu is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
 - A client/server architecture. This, for example, can allow Malibu to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.

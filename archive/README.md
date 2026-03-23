@@ -1,144 +1,141 @@
-<div align="center">
-  <h1>Malibu</h1>
-  <p><strong>AI-powered terminal coding agent with rich TUI, built on LangGraph, LangChain, and ACP.</strong></p>
-  <p>
-    <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-0f766e"></a>
-    <img alt="Python" src="https://img.shields.io/badge/python-3.11+-1d4ed8">
-    <img alt="Architecture" src="https://img.shields.io/badge/agent-Terminal%20Coding%20Agent-0f172a">
-  </p>
-</div>
+<p align="center">
+  <a href="https://opencode.ai">
+    <picture>
+      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
+      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
+      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="Malibu logo">
+    </picture>
+  </a>
+</p>
+<p align="center">The open source AI coding agent.</p>
+<p align="center">
+  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
+  <a href="https://www.npmjs.com/package/malibu-ai"><img alt="npm" src="https://img.shields.io/npm/v/malibu-ai?style=flat-square" /></a>
+  <a href="https://github.com/anomalyco/malibu/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/malibu/publish.yml?style=flat-square&branch=dev" /></a>
+</p>
 
-Malibu is a terminal-based coding agent for real project work — code edits, planning, Git operations, skills, hooks, plugins, guarded tool execution, and session continuity — all in a rich, branded terminal interface.
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README.zh.md">简体中文</a> |
+  <a href="README.zht.md">繁體中文</a> |
+  <a href="README.ko.md">한국어</a> |
+  <a href="README.de.md">Deutsch</a> |
+  <a href="README.es.md">Español</a> |
+  <a href="README.fr.md">Français</a> |
+  <a href="README.it.md">Italiano</a> |
+  <a href="README.da.md">Dansk</a> |
+  <a href="README.ja.md">日本語</a> |
+  <a href="README.pl.md">Polski</a> |
+  <a href="README.ru.md">Русский</a> |
+  <a href="README.bs.md">Bosanski</a> |
+  <a href="README.ar.md">العربية</a> |
+  <a href="README.no.md">Norsk</a> |
+  <a href="README.br.md">Português (Brasil)</a> |
+  <a href="README.th.md">ไทย</a> |
+  <a href="README.tr.md">Türkçe</a> |
+  <a href="README.uk.md">Українська</a> |
+  <a href="README.bn.md">বাংলা</a> |
+  <a href="README.gr.md">Ελληνικά</a> |
+  <a href="README.vi.md">Tiếng Việt</a>
+</p>
 
-## Quick Start
+[![Malibu Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
 
-```bash
-# 1) Clone and install
-git clone https://github.com/obinopaul/malibu.git
-cd malibu
-uv sync
+---
 
-# 2) Configure environment
-cp .env.example .env
-# Edit .env — set at least LLM_API_KEY (or OPENAI_API_KEY)
-
-# 3) Launch
-malibu
-
-# Option 1: Using uv (no activation needed)
-uv run malibu
-
-# Option 2: Activate venv first, then call directly
-.venv-fresh\Scripts\activate
-
-malibu
-
-```
-
-That's it. Type `malibu` and the terminal UI launches immediately — welcome screen, branded interface, and chat input ready to go.
-
-## Usage
-
-### Interactive Terminal UI (Default)
-
-```bash
-malibu                              # Launch the TUI
-malibu "fix the login bug"          # Launch with an initial prompt
-malibu --continue                   # Resume the most recent session
-malibu --resume                     # Pick a session to resume interactively
-malibu --resume <session-id>        # Resume a specific session
-malibu --no-welcome                 # Skip the splash screen
-```
-
-### Non-Interactive Mode
+### Installation
 
 ```bash
-malibu --prompt "refactor auth.py"  # Execute a single prompt and exit
+# YOLO
+curl -fsSL https://opencode.ai/install | bash
+
+# Package managers
+npm i -g malibu-ai@latest        # or bun/pnpm/yarn
+scoop install malibu             # Windows
+choco install malibu             # Windows
+brew install anomalyco/tap/malibu # macOS and Linux (recommended, always up to date)
+brew install malibu              # macOS and Linux (official brew formula, updated less)
+sudo pacman -S malibu            # Arch Linux (Stable)
+paru -S malibu-bin               # Arch Linux (Latest from AUR)
+mise use -g malibu               # Any OS
+nix run nixpkgs#malibu           # or github:anomalyco/malibu for latest dev branch
 ```
 
-### Server / Client (ACP Protocol)
+> [!TIP]
+> Remove versions older than 0.1.x before installing.
+
+### Desktop App (BETA)
+
+Malibu is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/malibu/releases) or [opencode.ai/download](https://opencode.ai/download).
+
+| Platform              | Download                              |
+| --------------------- | ------------------------------------- |
+| macOS (Apple Silicon) | `malibu-desktop-darwin-aarch64.dmg` |
+| macOS (Intel)         | `malibu-desktop-darwin-x64.dmg`     |
+| Windows               | `malibu-desktop-windows-x64.exe`    |
+| Linux                 | `.deb`, `.rpm`, or AppImage           |
 
 ```bash
-malibu server                       # Run as ACP agent on stdio
-malibu client <cmd>                 # Connect to an agent process
-malibu duet                         # Legacy: agent + client in one process
+# macOS (Homebrew)
+brew install --cask malibu-desktop
+# Windows (Scoop)
+scoop bucket add extras; scoop install extras/malibu-desktop
 ```
 
-### Other Commands
+#### Installation Directory
+
+The install script respects the following priority order for the installation path:
+
+1. `$MALIBU_INSTALL_DIR` - Custom installation directory
+2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
+3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
+4. `$HOME/.malibu/bin` - Default fallback
 
 ```bash
-malibu --version                    # Print version
-malibu --help                       # Show all options
-malibu generate-key                 # Generate a new API key
+# Examples
+MALIBU_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
 ```
 
-## Terminal UI Features
+### Agents
 
-The TUI is built with [Textual](https://textual.textualize.io/) and includes:
+Malibu includes two built-in agents you can switch between with the `Tab` key.
 
-- **Welcome Screen** — ASCII art banner, version info, quick-start hints
-- **Chat Screen** — StatusBar (mode, tokens, session), scrollable MessageList, ChatInput
-- **Plan Panel** — Toggle with `Ctrl+P` to view agent plans
-- **Approval Modals** — Human-in-the-loop permission prompts for dangerous operations
-- **Tool Call Rendering** — Visual indicators for file reads, edits, searches, and shell execution
-- **Slash Commands** — `/help`, `/mode`, `/model`, `/clear`, `/compact`, `/config`, `/mcp`, `/plan`, `/session`, `/skills`
-- **Ocean-Blue Theme** — Branded color palette with dark mode
+- **build** - Default, full-access agent for development work
+- **plan** - Read-only agent for analysis and code exploration
+  - Denies file edits by default
+  - Asks permission before running bash commands
+  - Ideal for exploring unfamiliar codebases or planning changes
 
-## Architecture
+Also included is a **general** subagent for complex searches and multistep tasks.
+This is used internally and can be invoked using `@general` in messages.
 
-| Subsystem | Purpose |
-|-----------|---------|
-| **Runtime** | Command safety checks, cost tracking, hierarchical config |
-| **Git** | Git operations, worktree management, branch protection |
-| **Hooks** | Lifecycle triggers (session, tool, compaction events) |
-| **Plugins** | Installable skill bundles with marketplace support |
-| **Skills** | SKILL.md-based reusable capabilities with multi-scope precedence |
-| **Agent** | LangGraph orchestration, middleware stack, prompt composition |
-| **TUI** | Textual-based terminal interface with widgets and screens |
-| **Server** | ACP protocol server with streaming and session management |
+Learn more about [agents](https://opencode.ai/docs/agents).
 
-### Skills System
+### Documentation
 
-Skills are directory packages with `SKILL.md` and optional support folders. Load precedence (later overrides earlier):
+For more info on how to configure Malibu, [**head over to our docs**](https://opencode.ai/docs).
 
-1. `malibu/skills/builtin/`
-2. `~/.malibu/skills/`
-3. `~/.agents/skills/`
-4. `.malibu/skills/`
-5. `.agents/skills/`
-6. Enabled plugin skills
+### Contributing
 
-### Hooks
+If you're interested in contributing to Malibu, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
 
-Lifecycle triggers for automation and policy enforcement:
+### Building on Malibu
 
-- `SESSION_START` / `SESSION_END` — session lifecycle
-- `PRE_TOOL_CALL` / `POST_TOOL_CALL` — tool execution wrapping
-- `PRE_COMPACT` — before context compaction
-- `USER_PROMPT_SUBMIT` — before user prompts reach the agent
+If you are working on a project that's related to Malibu and is using "malibu" as part of its name, for example "malibu-dashboard" or "malibu-mobile", please add a note to your README to clarify that it is not built by the Malibu team and is not affiliated with us in any way.
 
-### Plugins
+### FAQ
 
-Installable capability bundles:
+#### How is this different from Claude Code?
 
-```bash
-/skills                              # List all loaded skills
-```
+It's very similar to Claude Code in terms of capability. Here are the key differences:
 
-Plugins can provide skills, hooks, and configuration. Install from local directories or marketplaces.
+- 100% open source
+- Not coupled to any provider. Although we recommend the models we provide through [Malibu Zen](https://opencode.ai/zen), Malibu can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
+- Out-of-the-box LSP support
+- A focus on TUI. Malibu is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
+- A client/server architecture. This, for example, can allow Malibu to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.
 
-## Development
+---
 
-```bash
-uv run python -m pytest tests/ -v    # Run tests
-uv run ruff check .                  # Lint
-uv run ruff format .                 # Format
-```
-
-## ACP Documentation
-
-Legacy ACP-first documentation is preserved in [ACP_README.md](./ACP_README.md).
-
-## License
-
-MIT
+**Join our community** [Discord](https://discord.gg/malibu) | [X.com](https://x.com/malibu)
