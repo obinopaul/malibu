@@ -19,5 +19,10 @@
         "namespaceImportPackages": ["effect", "@effect/*"]
       }
     ]
-  }
+  },
+  "exclude": [
+    "advanced-calculator",
+    "scientific-calculator",
+    "test/agent"
+  ]
 }
