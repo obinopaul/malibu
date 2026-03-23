@@ -1,24 +1,19 @@
 /**
- * Deep Agents Harness — uses createDeepAgent from the `deepagents` package
- * as the single agent execution engine.
+ * Harness — uses createMalibuAgent (wrapping langchain's createAgent) as the
+ * single agent execution engine.
  *
  * Features:
- * - createDeepAgent with LocalShellBackend for real filesystem access
- * - Built-in middleware: TodoList, Filesystem, SubAgents, Prompt Caching, PatchToolCalls
- * - Note: DeepAgent includes SummarizationMiddleware by default, but it won't conflict
- *   with Malibu's SessionCompaction because each Harness.run() is a single turn —
- *   context doesn't grow enough within one turn to trigger it.
- * - Malibu custom tools passed alongside built-in tools
- * - Sub-agents (explore, general) via DeepAgent's task tool
+ * - createMalibuAgent with NO built-in filesystem tools (Malibu's own tools only)
+ * - Built-in middleware: TodoList, SubAgents, Summarization, PatchToolCalls, Prompt Caching
+ * - Malibu custom tools passed directly — no duplicates, no dedup needed
+ * - Sub-agents (explore, general) via langchain's task tool
  * - Skills loaded from .agents/skills/
  * - SQLite-backed checkpointer for persistent state
  * - Delta-based streaming for TUI rendering via Bus events
  * - Doom loop detection, token tracking, error normalization
  */
-import {
-  createDeepAgent,
-  LocalShellBackend,
-} from "deepagents"
+import { LocalShellBackend } from "deepagents"
+import { createMalibuAgent } from "./create-agent"
 import {
   HumanMessage,
   AIMessage,
@@ -46,56 +41,20 @@ import type { Permission } from "../permission"
 import type { Tool } from "../tool/tool"
 import { canonTool, sameTool } from "../tool/alias"
 import z from "zod"
-import { dedupeRequestTools } from "./tool-dedupe"
 
 const log = Log.create({ service: "harness" })
 
 /**
- * Tools that truly duplicate DeepAgent middleware functionality and should
- * NOT be passed as custom tools.
- *
- * - "task" duplicates the SubAgentMiddleware's built-in task tool
- * - "todowrite"/"todoread" duplicate the TodoListMiddleware
- *
- * Filesystem compatibility tools stay enabled. The middleware below deduplicates
- * duplicate tool names, keeping Malibu's tools first and dropping the later
- * DeepAgent copies from the model-visible schema list.
+ * Tools that duplicate middleware functionality and should NOT be passed
+ * as custom tools to createMalibuAgent.
+ * - "task" duplicates SubAgentMiddleware's task tool
+ * - "todowrite"/"todoread" duplicate TodoListMiddleware
  */
 const MIDDLEWARE_ONLY_TOOLS = new Set([
-  "task",       // DeepAgent: SubAgentMiddleware task tool
-  "todowrite",  // DeepAgent: TodoListMiddleware
-  "todoread",   // DeepAgent: TodoListMiddleware
+  "task",
+  "todowrite",
+  "todoread",
 ])
-
-/**
- * Custom middleware that deduplicates request.tools by name so the model only
- * sees one schema per tool. Malibu tools are passed to createDeepAgent first,
- * so keeping the first occurrence preserves Malibu's implementations while
- * leaving DeepAgent middleware mounted.
- *
- * How it works:
- * - ReactAgent assembles toolClasses = [...userTools, ...middlewareTools]
- * - The model receives request.tools in wrapModelCall
- * - We keep the first tool for each name and drop later duplicates
- * - The model only sees Malibu's tools with their rich Zod schemas
- * - ToolNode uses .find() on toolClasses, returning Malibu's version first
- */
-function createToolOverrideMiddleware() {
-  return {
-    name: "MalibuToolOverride",
-    wrapModelCall: async (request: any, handler: any) => {
-      const { kept, dropped } = dedupeRequestTools(request.tools)
-      if (dropped.length > 0) {
-        log.info("tool-override: deduped request tools", {
-          before: request.tools.length,
-          after: kept.length,
-          dropped,
-        })
-      }
-      return handler({ ...request, tools: kept })
-    },
-  }
-}
 
 export namespace Harness {
   /** Events published during harness execution */
@@ -230,9 +189,9 @@ export namespace Harness {
   }
 
   /**
-   * Build the full createDeepAgent configuration from a Harness.Config.
+   * Build the full createMalibuAgent configuration from a Harness.Config.
    */
-  async function buildDeepAgentConfig(config: Config) {
+  async function buildAgentConfig(config: Config) {
     // 1. Create the LangChain ChatModel via unified provider
     const chatModel = await UnifiedProvider.create(config.model, {
       temperature: config.agent.temperature,
@@ -302,7 +261,7 @@ export namespace Harness {
   /**
    * Create and run the agent harness for a single turn.
    *
-   * Uses createDeepAgent from the deepagents package with:
+   * Uses createMalibuAgent with:
    * - LocalShellBackend for real filesystem
    * - Sub-agents (explore, general) via built-in task tool
    * - Skills from .agents/skills/
@@ -316,10 +275,14 @@ export namespace Harness {
       model: config.model.id,
     })
 
-    const built = await buildDeepAgentConfig(config)
+    const built = await buildAgentConfig(config)
 
-    const agent = createDeepAgent({
-      model: built.chatModel as any,
+    const isAnthropicModel = config.model.providerID === "anthropic"
+      || config.model.providerID === "anthropic-vertex"
+      || config.model.id?.includes("claude")
+
+    const agent = createMalibuAgent({
+      model: built.chatModel,
       tools: built.langchainTools,
       systemPrompt: built.systemPrompt,
       checkpointer: ensureCheckpointer(),
@@ -327,10 +290,7 @@ export namespace Harness {
       subagents: built.subagents,
       skills: built.skillPaths,
       name: config.agent.name,
-      // Custom middleware appended AFTER DeepAgent's built-in middleware.
-      // createToolOverrideMiddleware keeps the first schema for each tool name,
-      // which preserves Malibu's compat tools and drops duplicate DeepAgent copies.
-      middleware: [createToolOverrideMiddleware()] as any,
+      isAnthropicModel,
     })
 
     const langchainMessages = convertMessages(config.messages)
@@ -343,7 +303,7 @@ export namespace Harness {
    * Core stream processing loop for agent execution.
    *
    * Uses streamMode: "messages" for token-level AIMessageChunk streaming.
-   * DeepAgent extends ReactAgent, so the stream format is identical.
+   * createMalibuAgent wraps createAgent (ReactAgent), so the stream format is standard.
    *
    * Handles:
    * - Token-by-token text rendering in the TUI
@@ -353,7 +313,7 @@ export namespace Harness {
    * - Doom loop detection
    */
   async function streamAgent(
-    agent: ReturnType<typeof createDeepAgent>,
+    agent: ReturnType<typeof createMalibuAgent>,
     input: any,
     threadId: string,
     config: Config,
