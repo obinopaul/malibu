@@ -1,0 +1,5 @@
+Hello from Malibu!
+This file was created to test the write and edit workflow.
+It has now been edited successfully!
+Line three is here for good measure.
+And a brand new fourth line was added.

@@ -7,16 +7,22 @@
  * exports like `countTokensApproximately` that `deepagents` needs.
  */
 import { plugin } from "bun"
+import { resolve } from "path"
+
+// Resolve the Node entry point for langchain relative to this script.
+// The `--conditions=browser` flag (needed for solid-js / @opentui TUI)
+// causes langchain to resolve to `dist/browser.js` which lacks exports
+// like `countTokensApproximately` that `deepagents` needs.
+const langchainNodeEntry = resolve(
+  import.meta.dir,
+  "../node_modules/langchain/dist/index.js",
+)
 
 plugin({
   name: "langchain-node-resolver",
   setup(build) {
-    // Intercept bare "langchain" imports and force the Node entry point
-    build.onResolve({ filter: /^langchain$/ }, (args) => {
-      return {
-        path: "langchain/dist/index.js",
-        namespace: "node-resolve",
-      }
+    build.onResolve({ filter: /^langchain$/ }, () => {
+      return { path: langchainNodeEntry }
     })
   },
 })

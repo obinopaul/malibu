@@ -27,7 +27,6 @@ const map = new Map<string, string>([
   ["todowrite", "todowrite"],
   ["write_todos", "todowrite"],
   ["todoread", "todoread"],
-  ["task", "task"],
 ])
 
 export function canonTool(name?: string) {

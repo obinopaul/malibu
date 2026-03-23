@@ -82,6 +82,7 @@ export namespace Harness {
         toolCallId: z.string(),
         tool: z.string(),
         output: z.string(),
+        args: z.any().optional(),
       }),
     ),
     StepComplete: BusEvent.define(
@@ -281,7 +282,7 @@ export namespace Harness {
       || config.model.providerID === "anthropic-vertex"
       || config.model.id?.includes("claude")
 
-    const malibuResult = createMalibuAgent({
+    let agent = createMalibuAgent({
       model: built.chatModel,
       tools: built.langchainTools,
       systemPrompt: built.systemPrompt,
@@ -292,7 +293,15 @@ export namespace Harness {
       name: config.agent.name,
       isAnthropicModel,
     })
-    const agent: any = malibuResult.agent
+
+    // Map agent.steps to recursionLimit if configured.
+    // Each "step" is a model→tool round = 2 graph nodes, so multiply by 2.
+    // This replaces the old outer-loop step counting now that the full ReAct
+    // loop runs inside a single .stream() call.
+    const steps = config.agent.steps
+    if (steps && steps < Infinity) {
+      agent = agent.withConfig({ recursionLimit: steps * 2 })
+    }
 
     const langchainMessages = convertMessages(config.messages)
     const threadId = `${config.sessionID}-${config.messageID}`
@@ -331,6 +340,9 @@ export namespace Harness {
 
     const toolCalls: ToolCallResult[] = []
     const pendingTools = new Map<string, { name: string; args: string; started: boolean }>()
+    // Map chunk index → pendingTools id, so subsequent tool_call_chunks (which lack
+    // an `id` field and only carry `index` + `args`) can be correlated to the right entry.
+    const chunkIndexToId = new Map<number, string>()
     // Index: tool name → ordered list of pending IDs, used to detect double-tracking.
     // When the same tool call appears in both tool_call_chunks (ID "0") and
     // tool_calls (ID "call_abc"), we re-key to the authoritative ID.
@@ -379,7 +391,6 @@ export namespace Harness {
     let tokenUsage: TokenUsage = { prompt: 0, completion: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
 
     try {
-      // @ts-expect-error — tsgo incorrectly infers CreateMalibuAgentResult instead of destructured `any` agent
       const stream = await agent.stream(input, {
         ...graphConfig,
         streamMode: "messages",
@@ -435,25 +446,43 @@ export namespace Harness {
           }
 
           // --- Tool call chunks (streaming deltas) ---
+          // LangChain sends tool_call_chunks with `id` only on the first chunk.
+          // Subsequent delta chunks carry `index` + `args` but NO `id`.
+          // We use chunkIndexToId to correlate deltas back to the right pending entry.
           for (const tcChunk of msg.tool_call_chunks ?? []) {
             const id = tcChunk.id
-            if (!id) continue
+            const index = (tcChunk as any).index as number | undefined
 
-            if (!pendingTools.has(id)) {
-              pendingTools.set(id, { name: tcChunk.name ?? "", args: tcChunk.args ?? "", started: false })
-              if (tcChunk.name) trackPendingName(tcChunk.name, id)
-              log.info("tool_call_chunk:new", {
-                id,
-                name: tcChunk.name,
-                pendingCount: pendingTools.size,
-              })
-            } else {
-              const pending = pendingTools.get(id)!
-              if (tcChunk.name && !pending.name) {
-                pending.name = tcChunk.name
-                trackPendingName(tcChunk.name, id)
+            if (id) {
+              // Initial chunk — has id (and usually name)
+              if (!pendingTools.has(id)) {
+                pendingTools.set(id, { name: tcChunk.name ?? "", args: tcChunk.args ?? "", started: false })
+                if (tcChunk.name) trackPendingName(tcChunk.name, id)
+                log.info("tool_call_chunk:new", {
+                  id,
+                  name: tcChunk.name,
+                  hasArgs: !!tcChunk.args,
+                  argsLen: tcChunk.args?.length ?? 0,
+                  pendingCount: pendingTools.size,
+                })
+              } else {
+                const pending = pendingTools.get(id)!
+                if (tcChunk.name && !pending.name) {
+                  pending.name = tcChunk.name
+                  trackPendingName(tcChunk.name, id)
+                }
+                pending.args += tcChunk.args ?? ""
               }
-              pending.args += tcChunk.args ?? ""
+              // Track index→id so subsequent chunks without id can be correlated
+              if (index !== undefined && index !== null) {
+                chunkIndexToId.set(index, id)
+              }
+            } else if (index !== undefined && index !== null) {
+              // Delta chunk — no id, use index to find the right pending entry
+              const mappedId = chunkIndexToId.get(index)
+              if (mappedId && pendingTools.has(mappedId)) {
+                pendingTools.get(mappedId)!.args += tcChunk.args ?? ""
+              }
             }
           }
 
@@ -463,7 +492,23 @@ export namespace Harness {
           // The ToolMessage will use the tool_calls ID, so we re-key to that.
           for (const tc of msg.tool_calls ?? []) {
             const id = tc.id ?? tc.name
-            if (pendingTools.has(id)) continue
+            // If already tracked by tool_call_chunks with same ID, update args
+            // from the complete tool_calls (chunks may have empty/partial args)
+            if (pendingTools.has(id)) {
+              const existing = pendingTools.get(id)!
+              if (tc.args && Object.keys(tc.args).length > 0) {
+                const existingArgs = existing.args ? (() => { try { return JSON.parse(existing.args) } catch { return {} } })() : {}
+                if (Object.keys(existingArgs).length === 0) {
+                  existing.args = JSON.stringify(tc.args)
+                  log.info("tool_call:args_upgraded", {
+                    id,
+                    name: tc.name,
+                    argsKeys: Object.keys(tc.args),
+                  })
+                }
+              }
+              continue
+            }
 
             // Check if this is the same tool call already tracked under a different ID
             // (from tool_call_chunks). If so, re-key to the authoritative ID.
@@ -623,6 +668,14 @@ export namespace Harness {
             }
           }
 
+          log.info("tool_message:parsedArgs", {
+            toolCallId,
+            name: msg.name,
+            pendingArgsRaw: pending?.args?.slice(0, 200),
+            parsedArgsKeys: Object.keys(parsedArgs),
+            pendingStarted: pending?.started,
+          })
+
           const toolName = pending?.name ?? msg.name ?? "unknown"
           if (pending && !pending.started) {
             await Bus.publish(Event.ToolStart, {
@@ -651,6 +704,7 @@ export namespace Harness {
             toolCallId,
             tool: toolName,
             output: content,
+            args: parsedArgs,
           })
 
           // Doom loop detection
@@ -694,7 +748,18 @@ export namespace Harness {
 
           for (const tc of msg.tool_calls ?? []) {
             const id = tc.id ?? tc.name
-            if (pendingTools.has(id)) continue
+            // Same upgrade logic as AIMessageChunk handler
+            if (pendingTools.has(id)) {
+              const existing = pendingTools.get(id)!
+              if (tc.args && Object.keys(tc.args).length > 0) {
+                const existingArgs = existing.args ? (() => { try { return JSON.parse(existing.args) } catch { return {} } })() : {}
+                if (Object.keys(existingArgs).length === 0) {
+                  existing.args = JSON.stringify(tc.args)
+                  log.info("tool_call:args_upgraded(AIMessage)", { id, name: tc.name })
+                }
+              }
+              continue
+            }
 
             // Same re-key logic as AIMessageChunk handler
             const existingId = tc.name ? findRekeyCandidate(tc.name, id) : undefined
@@ -797,8 +862,14 @@ export namespace Harness {
         tokenUsage,
       })
 
+      // createAgent (ReactAgent) runs the full ReAct loop internally within
+      // a single .stream() call — model → tools → model → ... → final text.
+      // When the stream ends naturally, the agent has completed its reasoning.
+      // Always return "stop" to avoid redundant re-invocations from the outer
+      // session loop (which was designed for single-step processing).
+      // The recursionLimit: 10_000 in create-agent.ts handles loop continuation.
       return {
-        status: toolCalls.length > 0 ? "continue" : "stop",
+        status: "stop" as const,
         response,
         toolCalls,
         tokenUsage,
@@ -931,16 +1002,27 @@ export namespace Harness {
               })),
             }),
           )
+          // Always create a ToolMessage for every tool call to prevent dangling
+          // AIMessage tool_calls that violate the API contract and cause errors.
           for (const tc of toolCallParts) {
-            if (tc.state?.status === "completed" || tc.state?.status === "error") {
-              result.push(
-                new ToolMessage({
-                  tool_call_id: tc.callID ?? tc.id,
-                  name: tc.tool,
-                  content: tc.state?.output ?? tc.state?.error ?? "",
-                }),
-              )
+            const status = tc.state?.status
+            let content: string
+            if (status === "completed") {
+              content = tc.state?.output ?? ""
+            } else if (status === "error") {
+              content = tc.state?.error ?? "Tool execution failed"
+            } else {
+              // Handle "running", "pending", undefined, or any other status
+              content = tc.state?.output ?? tc.state?.error
+                ?? `Tool execution incomplete (status: ${status ?? "unknown"})`
             }
+            result.push(
+              new ToolMessage({
+                tool_call_id: tc.callID ?? tc.id,
+                name: tc.tool,
+                content,
+              }),
+            )
           }
         } else if (textParts) {
           result.push(new AIMessage(textParts))

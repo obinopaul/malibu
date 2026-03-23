@@ -415,10 +415,11 @@ They execute as background tasks while you continue working.
 - Always show full Task-N IDs — never truncate.
 
 ### When to use background_task vs task:
-- Use \`background_task\` when you have multiple independent tasks and don't need results immediately.
-- Use \`task\` (sync) when you need the result before your next step.
+- Use \`background_task\` when you have 2+ independent tasks to run concurrently.
+- Use \`task\` (sync) ONLY for a single operation where you need the result before your next step.
 - Use \`background_task\` for long-running research, analysis, or multi-step operations.
-- Use \`task\` for quick lookups or operations where blocking is fine.`
+- Use \`task\` for quick single lookups or operations where blocking is fine.
+- **CRITICAL: NEVER call multiple \`task\` tools in the same message — this will crash.** Use \`background_task\` for ALL parallel work.`
 
 // ---------------------------------------------------------------------------
 // Subagent Graph Builder

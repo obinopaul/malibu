@@ -1613,18 +1613,19 @@ function GenericTool(props: ToolProps<any>) {
     if (expanded() || !overflow()) return output()
     return [...lines().slice(0, maxLines), "…"].join("\n")
   })
+  const display = createMemo(() => formatToolCall(props.tool, props.input))
 
   return (
     <Show
       when={props.output && ctx.showGenericToolOutput()}
       fallback={
-        <InlineTool icon="⚙" pending="Writing command..." complete={true} part={props.part}>
-          {props.tool} {input(props.input)}
+        <InlineTool icon="⚙" pending="Running..." complete={true} part={props.part}>
+          {display()}
         </InlineTool>
       }
     >
       <BlockTool
-        title={`# ${props.tool} ${input(props.input)}`}
+        title={display()}
         part={props.part}
         onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
       >
@@ -1659,6 +1660,7 @@ function InlineTool(props: {
   children: JSX.Element
   part: ToolPart
   onClick?: () => void
+  outputPreview?: string
 }) {
   const [margin, setMargin] = createSignal(0)
   const { theme } = useTheme()
@@ -1738,6 +1740,11 @@ function InlineTool(props: {
           </text>
         </Match>
       </Switch>
+      <Show when={props.outputPreview && (props.part.state.status === "completed" || props.part.state.status === "error")}>
+        <text paddingLeft={6} fg={theme.textMuted}>
+          ⎿  {props.outputPreview}
+        </text>
+      </Show>
       <Show when={error() && !denied()}>
         <text fg={theme.error}>{error()}</text>
       </Show>
@@ -1792,6 +1799,79 @@ function BlockTool(props: {
   )
 }
 
+function ToolOutputPreview(props: {
+  output: string
+  maxLines?: number
+  language?: string
+  maxChars?: number
+}) {
+  const { theme, syntax } = useTheme()
+  const renderer = useRenderer()
+  const maxLines = props.maxLines ?? 8
+  const maxExpandedLines = maxLines * 4
+  const maxChars = props.maxChars ?? 20000
+
+  // Pre-slice large outputs for performance, trim to last complete line
+  const sliced = createMemo(() => {
+    const raw = props.output
+    if (!raw || !raw.trim()) return ""
+    if (raw.length <= maxChars) return raw
+    const cut = raw.slice(0, maxChars)
+    const lastNewline = cut.lastIndexOf("\n")
+    return lastNewline > 0 ? cut.slice(0, lastNewline) : cut
+  })
+
+  const lines = createMemo(() => sliced().split("\n"))
+  const overflow = createMemo(() => lines().length > maxLines)
+  const [expanded, setExpanded] = createSignal(false)
+
+  // Reset expanded state when output changes
+  createEffect(() => {
+    props.output // track dependency
+    setExpanded(false)
+  })
+
+  const limited = createMemo(() => {
+    if (!overflow()) return sliced()
+    if (expanded()) return lines().slice(0, maxExpandedLines).join("\n")
+    return lines().slice(0, maxLines).join("\n")
+  })
+
+  const hiddenCount = createMemo(() => {
+    if (!overflow()) return 0
+    if (expanded()) return Math.max(0, lines().length - maxExpandedLines)
+    return lines().length - maxLines
+  })
+
+  return (
+    <Show when={sliced()}>
+      <box
+        gap={1}
+        onMouseUp={() => {
+          if (renderer.getSelection()?.getSelectedText()) return
+          if (overflow()) setExpanded((prev) => !prev)
+        }}
+      >
+        <Show
+          when={props.language}
+          fallback={<text fg={theme.text}>{limited()}</text>}
+        >
+          <code filetype={props.language} syntaxStyle={syntax()} content={limited()} fg={theme.text} />
+        </Show>
+        <Show when={overflow()}>
+          <text fg={theme.textMuted}>
+            {expanded()
+              ? hiddenCount() > 0
+                ? `▴ ${hiddenCount()} more lines hidden`
+                : "▴ Click to collapse"
+              : `▾ ${hiddenCount()} more lines…`}
+          </text>
+        </Show>
+      </box>
+    </Show>
+  )
+}
+
 function Bash(props: ToolProps<typeof BashTool>) {
   const { theme } = useTheme()
   const sync = useSync()
@@ -1799,10 +1879,19 @@ function Bash(props: ToolProps<typeof BashTool>) {
   const output = createMemo(() => stripAnsi(props.metadata.output?.trim() ?? ""))
   const [expanded, setExpanded] = createSignal(false)
   const lines = createMemo(() => output().split("\n"))
-  const overflow = createMemo(() => lines().length > 10)
+  const overflow = createMemo(() => lines().length > 3)
   const limited = createMemo(() => {
     if (expanded() || !overflow()) return output()
-    return [...lines().slice(0, 10), "…"].join("\n")
+    return [...lines().slice(0, 3), "…"].join("\n")
+  })
+
+  const cmdDisplay = createMemo(() => {
+    const cmd = props.input.command
+    if (!cmd) return "Bash()"
+    // Truncate very long commands for display
+    const maxLen = 200
+    const truncated = cmd.length > maxLen ? cmd.slice(0, maxLen) + "..." : cmd
+    return `Bash(${truncated})`
   })
 
   const workdirDisplay = createMemo(() => {
@@ -1823,11 +1912,11 @@ function Bash(props: ToolProps<typeof BashTool>) {
   })
 
   const title = createMemo(() => {
-    const desc = props.input.description ?? "Shell"
+    const desc = props.input.description ?? cmdDisplay()
     const wd = workdirDisplay()
-    if (!wd) return `# ${desc}`
-    if (desc.includes(wd)) return `# ${desc}`
-    return `# ${desc} in ${wd}`
+    if (!wd) return desc
+    if (desc.includes(wd)) return desc
+    return `${desc} in ${wd}`
   })
 
   return (
@@ -1840,7 +1929,7 @@ function Bash(props: ToolProps<typeof BashTool>) {
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
           <box gap={1}>
-            <text fg={theme.text}>$ {props.input.command}</text>
+            <text fg={theme.textMuted}>⎿  $ {props.input.command}</text>
             <Show when={output()}>
               <text fg={theme.text}>{limited()}</text>
             </Show>
@@ -1851,8 +1940,8 @@ function Bash(props: ToolProps<typeof BashTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="$" pending="Writing command..." complete={props.input.command} part={props.part}>
-          {props.input.command}
+        <InlineTool icon="●" pending="Running command..." complete={props.input.command} part={props.part}>
+          {cmdDisplay()}
         </InlineTool>
       </Match>
     </Switch>
@@ -1866,11 +1955,21 @@ function Write(props: ToolProps<typeof WriteTool>) {
     if (!props.input.content) return ""
     return props.input.content
   })
+  const display = createMemo(() => {
+    const filePath = fp()
+    if (!filePath) return "Write()"
+    return `Write(${normalizePath(filePath)})`
+  })
+  const lineCount = createMemo(() => {
+    if (!code()) return undefined
+    const count = code().split("\n").length
+    return `${count} line${count !== 1 ? "s" : ""}`
+  })
 
   return (
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
-        <BlockTool title={"# Wrote " + normalizePath(fp()!)} part={props.part}>
+        <BlockTool title={display()} part={props.part}>
           <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
             <code
               conceal={false}
@@ -1883,9 +1982,14 @@ function Write(props: ToolProps<typeof WriteTool>) {
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={fp() ?? ""} />
         </BlockTool>
       </Match>
+      <Match when={props.part.state.status === "completed" && code()}>
+        <BlockTool title={display()} part={props.part}>
+          <ToolOutputPreview output={code()} maxLines={10} language={filetype(fp()!)} />
+        </BlockTool>
+      </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing write..." complete={fp()} part={props.part}>
-          Write {normalizePath(fp()!)}
+        <InlineTool icon="←" pending="Preparing write..." complete={fp()} part={props.part} outputPreview={lineCount()}>
+          {display()}
         </InlineTool>
       </Match>
     </Switch>
@@ -1893,13 +1997,41 @@ function Write(props: ToolProps<typeof WriteTool>) {
 }
 
 function Glob(props: ToolProps<typeof GlobTool>) {
+  const { theme } = useTheme()
+  const compacted = createMemo(
+    () => props.part.state.status === "completed" && (props.part.state as any).time?.compacted,
+  )
+  const display = createMemo(() => formatToolCall("Glob", props.input, "pattern"))
+  const matchSummary = createMemo(() => {
+    const count = props.metadata.count
+    if (!count) return undefined
+    return `${count} ${count === 1 ? "match" : "matches"}`
+  })
   return (
-    <InlineTool icon="✱" pending="Finding files..." complete={props.input.pattern} part={props.part}>
-      Glob "{props.input.pattern}" <Show when={props.input.path}>in {normalizePath(props.input.path)} </Show>
-      <Show when={props.metadata.count}>
-        ({props.metadata.count} {props.metadata.count === 1 ? "match" : "matches"})
-      </Show>
-    </InlineTool>
+    <Switch>
+      <Match when={props.output?.trim() && (props.metadata.count ?? 0) > 0 && !compacted()}>
+        <BlockTool
+          title={display()}
+          part={props.part}
+        >
+          <Show when={matchSummary()}>
+            <text fg={theme.textMuted}>⎿  {matchSummary()}</text>
+          </Show>
+          <ToolOutputPreview output={props.output!} maxLines={3} />
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool
+          icon="✱"
+          pending="Finding files..."
+          complete={props.input.pattern}
+          part={props.part}
+          outputPreview={matchSummary()}
+        >
+          {display()}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
@@ -1914,6 +2046,13 @@ function Read(props: ToolProps<typeof ReadTool>) {
     if (!value || !Array.isArray(value)) return []
     return value.filter((p): p is string => typeof p === "string")
   })
+  const display = createMemo(() => {
+    const filePath = fp()
+    if (!filePath) return "Read()"
+    const normalized = normalizePath(filePath)
+    const extra = input(props.input, ["filePath", "file_path"])
+    return extra ? `Read(${JSON.stringify(normalized)}) ${extra}` : `Read(${JSON.stringify(normalized)})`
+  })
   return (
     <>
       <InlineTool
@@ -1923,13 +2062,13 @@ function Read(props: ToolProps<typeof ReadTool>) {
         spinner={isRunning()}
         part={props.part}
       >
-        Read {normalizePath(fp()!)} {input(props.input, ["filePath", "file_path"])}
+        {display()}
       </InlineTool>
       <For each={loaded()}>
         {(filepath) => (
           <box paddingLeft={3}>
             <text paddingLeft={3} fg={theme.textMuted}>
-              ↳ Loaded {normalizePath(filepath)}
+              ⎿  Loaded {normalizePath(filepath)}
             </text>
           </box>
         )}
@@ -1939,55 +2078,135 @@ function Read(props: ToolProps<typeof ReadTool>) {
 }
 
 function Grep(props: ToolProps<typeof GrepTool>) {
+  const { theme } = useTheme()
+  const compacted = createMemo(
+    () => props.part.state.status === "completed" && (props.part.state as any).time?.compacted,
+  )
+  const display = createMemo(() => formatToolCall("Grep", props.input, "pattern"))
+  const matchSummary = createMemo(() => {
+    const count = props.metadata.matches
+    if (!count) return undefined
+    return `${count} ${count === 1 ? "match" : "matches"}`
+  })
   return (
-    <InlineTool icon="✱" pending="Searching content..." complete={props.input.pattern} part={props.part}>
-      Grep "{props.input.pattern}" <Show when={props.input.path}>in {normalizePath(props.input.path)} </Show>
-      <Show when={props.metadata.matches}>
-        ({props.metadata.matches} {props.metadata.matches === 1 ? "match" : "matches"})
-      </Show>
-    </InlineTool>
+    <Switch>
+      <Match when={props.output && (props.metadata.matches ?? 0) > 0 && !compacted()}>
+        <BlockTool
+          title={display()}
+          part={props.part}
+        >
+          <Show when={matchSummary()}>
+            <text fg={theme.textMuted}>⎿  {matchSummary()}</text>
+          </Show>
+          <ToolOutputPreview output={props.output!} maxLines={3} />
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool
+          icon="✱"
+          pending="Searching content..."
+          complete={props.input.pattern}
+          part={props.part}
+          outputPreview={matchSummary()}
+        >
+          {display()}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
 function List(props: ToolProps<typeof ListTool>) {
-  const dir = createMemo(() => {
-    if (props.input.path) {
-      return normalizePath(props.input.path)
-    }
-    return ""
+  const display = createMemo(() => {
+    const p = props.input.path
+    if (p) return `List(${JSON.stringify(normalizePath(p))})`
+    return "List()"
   })
   return (
     <InlineTool icon="→" pending="Listing directory..." complete={props.input.path !== undefined} part={props.part}>
-      List {dir()}
+      {display()}
     </InlineTool>
   )
 }
 
 function WebFetch(props: ToolProps<typeof WebFetchTool>) {
+  const url = () => (props.input as any).url
+  const compacted = createMemo(
+    () => props.part.state.status === "completed" && (props.part.state as any).time?.compacted,
+  )
+  const display = createMemo(() => {
+    const u = url()
+    return u ? `WebFetch(${JSON.stringify(u)})` : "WebFetch()"
+  })
   return (
-    <InlineTool icon="%" pending="Fetching from the web..." complete={(props.input as any).url} part={props.part}>
-      WebFetch {(props.input as any).url}
-    </InlineTool>
+    <Switch>
+      <Match when={props.output && props.output.trim() && !compacted()}>
+        <BlockTool title={display()} part={props.part}>
+          <ToolOutputPreview output={props.output!} maxLines={3} language="markdown" />
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon="%" pending="Fetching from the web..." complete={url()} part={props.part}>
+          {display()}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
 function CodeSearch(props: ToolProps<any>) {
-  const input = props.input as any
+  const { theme } = useTheme()
+  const inp = props.input as any
   const metadata = props.metadata as any
+  const compacted = createMemo(
+    () => props.part.state.status === "completed" && (props.part.state as any).time?.compacted,
+  )
+  const display = createMemo(() => inp.query ? `CodeSearch(${JSON.stringify(inp.query)})` : "CodeSearch()")
+  const resultSummary = createMemo(() => metadata.results ? `${metadata.results} results` : undefined)
   return (
-    <InlineTool icon="◇" pending="Searching code..." complete={input.query} part={props.part}>
-      Exa Code Search "{input.query}" <Show when={metadata.results}>({metadata.results} results)</Show>
-    </InlineTool>
+    <Switch>
+      <Match when={props.output && props.output.trim() && !compacted()}>
+        <BlockTool title={display()} part={props.part}>
+          <Show when={resultSummary()}>
+            <text fg={theme.textMuted}>⎿  {resultSummary()}</text>
+          </Show>
+          <ToolOutputPreview output={props.output!} maxLines={3} />
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon="◇" pending="Searching code..." complete={inp.query} part={props.part} outputPreview={resultSummary()}>
+          {display()}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
 function WebSearch(props: ToolProps<any>) {
-  const input = props.input as any
+  const { theme } = useTheme()
+  const inp = props.input as any
   const metadata = props.metadata as any
+  const compacted = createMemo(
+    () => props.part.state.status === "completed" && (props.part.state as any).time?.compacted,
+  )
+  const display = createMemo(() => inp.query ? `WebSearch(${JSON.stringify(inp.query)})` : "WebSearch()")
+  const resultSummary = createMemo(() => metadata.numResults ? `${metadata.numResults} results` : undefined)
   return (
-    <InlineTool icon="◈" pending="Searching web..." complete={input.query} part={props.part}>
-      Exa Web Search "{input.query}" <Show when={metadata.numResults}>({metadata.numResults} results)</Show>
-    </InlineTool>
+    <Switch>
+      <Match when={props.output && props.output.trim() && !compacted()}>
+        <BlockTool title={display()} part={props.part}>
+          <Show when={resultSummary()}>
+            <text fg={theme.textMuted}>⎿  {resultSummary()}</text>
+          </Show>
+          <ToolOutputPreview output={props.output!} maxLines={3} />
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon="◈" pending="Searching web..." complete={inp.query} part={props.part} outputPreview={resultSummary()}>
+          {display()}
+        </InlineTool>
+      </Match>
+    </Switch>
   )
 }
 
@@ -2068,18 +2287,42 @@ function Edit(props: ToolProps<typeof EditTool>) {
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
     if (diffStyle === "stacked") return "unified"
-    // Default to "auto" behavior
     return ctx.width > 120 ? "split" : "unified"
   })
 
   const ft = createMemo(() => filetype(fp()))
-
   const diffContent = createMemo(() => props.metadata.diff)
+
+  const display = createMemo(() => {
+    const filePath = fp()
+    if (!filePath) return "Edit()"
+    return `Edit(${normalizePath(filePath)})`
+  })
+
+  const diffSummary = createMemo(() => {
+    const diff = props.metadata.diff
+    if (!diff) return undefined
+    const lines = (typeof diff === "string" ? diff : "").split("\n")
+    let added = 0
+    let removed = 0
+    for (const line of lines) {
+      if (line.startsWith("+") && !line.startsWith("+++")) added++
+      else if (line.startsWith("-") && !line.startsWith("---")) removed++
+    }
+    if (added === 0 && removed === 0) return undefined
+    const parts: string[] = []
+    if (added > 0) parts.push(`Added ${added} line${added !== 1 ? "s" : ""}`)
+    if (removed > 0) parts.push(`removed ${removed} line${removed !== 1 ? "s" : ""}`)
+    return parts.join(", ")
+  })
 
   return (
     <Switch>
       <Match when={props.metadata.diff !== undefined}>
-        <BlockTool title={"← Edit " + normalizePath(fp()!)} part={props.part}>
+        <BlockTool title={display()} part={props.part}>
+          <Show when={diffSummary()}>
+            <text fg={theme.textMuted}>⎿  {diffSummary()}</text>
+          </Show>
           <box paddingLeft={1}>
             <diff
               diff={diffContent()}
@@ -2105,8 +2348,8 @@ function Edit(props: ToolProps<typeof EditTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing edit..." complete={fp()} part={props.part}>
-          Edit {normalizePath(fp()!)} {input({ replaceAll: replAll() })}
+        <InlineTool icon="←" pending="Preparing edit..." complete={fp()} part={props.part} outputPreview={diffSummary()}>
+          {display()} {replAll() ? "[replace_all]" : ""}
         </InlineTool>
       </Match>
     </Switch>
@@ -2246,7 +2489,7 @@ function Question(props: ToolProps<typeof QuestionTool>) {
 function Skill(props: ToolProps<typeof SkillTool>) {
   return (
     <InlineTool icon="→" pending="Loading skill..." complete={props.input.name} part={props.part}>
-      Skill "{props.input.name}"
+      Skill({props.input.name ? JSON.stringify(props.input.name) : ""})
     </InlineTool>
   )
 }
@@ -2295,6 +2538,21 @@ function input(input: Record<string, any>, omit?: string[]): string {
   })
   if (primitives.length === 0) return ""
   return `[${primitives.map(([key, value]) => `${key}=${value}`).join(", ")}]`
+}
+
+/** Format tool call in function-call style: ToolName("arg") or ToolName({"key":"val"}) */
+function formatToolCall(name: string, args: Record<string, any>, primaryKey?: string): string {
+  if (primaryKey && args[primaryKey] !== undefined) {
+    return `${name}(${JSON.stringify(args[primaryKey])})`
+  }
+  const entries = Object.entries(args).filter(
+    ([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
+  )
+  if (entries.length === 0) return `${name}()`
+  if (entries.length === 1) return `${name}(${JSON.stringify(entries[0][1])})`
+  const json = JSON.stringify(Object.fromEntries(entries))
+  const maxLen = 120
+  return json.length > maxLen ? `${name}(${json.slice(0, maxLen - 3)}...)` : `${name}(${json})`
 }
 
 function filetype(input?: string) {

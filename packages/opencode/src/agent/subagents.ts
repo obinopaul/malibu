@@ -36,7 +36,6 @@ const GENERAL_DENIED_TOOLS = new Set(["todoread", "todowrite"])
  * - "todowrite"/"todoread" duplicate TodoListMiddleware
  */
 const MIDDLEWARE_ONLY_TOOLS = new Set([
-  "task",       // DeepAgent: SubAgentMiddleware task tool
   "todowrite",  // DeepAgent: TodoListMiddleware
   "todoread",   // DeepAgent: TodoListMiddleware
 ])

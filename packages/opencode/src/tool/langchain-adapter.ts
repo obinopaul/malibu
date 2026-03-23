@@ -124,6 +124,31 @@ function fail(error: unknown) {
 }
 
 /**
+ * Normalize snake_case keys to camelCase.
+ * LLMs sometimes hallucinate snake_case parameter names (e.g. `file_path`
+ * instead of `filePath`, `old_string` instead of `oldString`).
+ * Rather than failing with a confusing Zod validation error, we silently
+ * remap the most common variants so the tool call succeeds.
+ */
+function snakeToCamel(key: string): string {
+  return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+}
+
+function normalizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(args)) {
+    const camel = snakeToCamel(key)
+    // Prefer the camelCase key if both exist (e.g. args has both filePath and file_path)
+    if (camel !== key && camel in args) {
+      out[key] = value
+    } else {
+      out[camel] = value
+    }
+  }
+  return out
+}
+
+/**
  * Convert a single Malibu Tool.Info to a LangChain DynamicStructuredTool.
  *
  * The tool's Zod schema is passed through directly since LangChain
@@ -215,6 +240,13 @@ export async function toLangChainTool(
 
   const orig = tool.call.bind(tool)
   ;(tool as any).call = async (arg: any, configArg?: any, tags?: string[]) => {
+    // Normalize snake_case keys to camelCase before Zod validation.
+    // LLMs sometimes hallucinate snake_case (e.g. file_path → filePath).
+    if (arg && typeof arg === "object" && !Array.isArray(arg) && arg.type !== "tool_call") {
+      arg = normalizeArgs(arg)
+    } else if (arg && typeof arg === "object" && arg.type === "tool_call" && arg.args) {
+      arg = { ...arg, args: normalizeArgs(arg.args) }
+    }
     try {
       return await orig(arg, configArg, tags)
     } catch (error) {

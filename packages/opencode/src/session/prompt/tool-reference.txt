@@ -6,6 +6,7 @@ You have a set of specialized tools for working with code and the filesystem. Ea
 
 Before you edit code, you must understand it. Before you understand it, you must find it. The tools below follow a natural progression: first you discover what exists (List, Glob, Grep), then you read it (Read), then you change it (Edit, Write), and you use Bash for everything else that requires a shell. This is not optional — skipping straight to editing without reading is how mistakes happen.
 
+NOTE: Make sure to never call a tool with an empty input parameter as this will output an error. Always add an input parameter to tools that require it. THIS IS IMPORTANT.
 ---
 
 ## List — Discover what files and directories exist
@@ -336,16 +337,18 @@ bash({ "command": "bun test", "description": "Verify test fix" })
 
 ---
 
-## Task — Launch a subagent for complex work
+## Task — Launch a SINGLE subagent (synchronous, blocking)
 
-**When to use:** You need to delegate a complex, multi-step task to a specialized agent — like exploring a large codebase, researching a question, or executing a multi-file change. Each subagent has its own context and tools. Use Task when direct tool calls would require too many sequential operations.
+**When to use:** You need to delegate a task to a specialized subagent and you need the result before your next step. The call blocks until the subagent finishes. Use for quick, single operations.
+
+**CRITICAL:** NEVER call multiple `task` tools in the same message. Parallel `task` calls WILL crash. For parallel work, use `background_task` instead.
 
 **Required parameters:** `description` (string — 3-5 words), `prompt` (string — detailed instructions), `subagent_type` (string — the agent type).
 **Optional parameters:** `task_id` (string — resume a previous task).
 
 **How to call it:**
 
-Launch an explore agent to research the codebase:
+Launch an explore agent (single, blocking call):
 ```
 task({
   "description": "Find auth implementation",
@@ -354,16 +357,57 @@ task({
 })
 ```
 
-Launch a general agent to perform work:
+**Important:** You MUST always provide `description`, `prompt`, AND `subagent_type`. Calling `task({})` will fail. NEVER issue multiple `task` calls in one message.
+
+---
+
+## Background Task — Launch subagents in parallel (asynchronous, non-blocking)
+
+**When to use:** You have 2+ independent tasks to run concurrently, or a long-running operation where you don't need results immediately. Each `background_task` call returns immediately with a Task-N ID while the subagent runs in the background.
+
+**Required parameters:** `description` (string — detailed task description), `subagent_type` (string — the agent type).
+
+**How to call it:**
+
+Launch multiple tasks in parallel (all in one message):
 ```
-task({
-  "description": "Refactor error handling",
-  "prompt": "In src/agent/harness.ts, refactor the error handling to use a centralized error handler. Read the file first, then implement the changes, and run the typecheck to verify.",
-  "subagent_type": "general"
-})
+background_task({ "description": "Research API authentication patterns in the codebase", "subagent_type": "general-purpose" })
+background_task({ "description": "Explore test coverage for the agent module", "subagent_type": "explore" })
+background_task({ "description": "Analyze error handling across all middleware", "subagent_type": "general-purpose" })
+```
+All three run concurrently. You get Task-1, Task-2, Task-3 IDs immediately.
+
+**After launching, continue working.** Do NOT immediately wait or check status.
+
+**Check progress** (optional, non-blocking):
+```
+task_progress({ "task_number": 1 })
 ```
 
-**Important:** You MUST always provide `description`, `prompt`, AND `subagent_type`. Calling `task({})` will fail.
+**Wait for results** (blocking):
+```
+wait_background_task({ "task_number": 2 })
+```
+Or wait for ALL pending tasks at once:
+```
+wait_background_task({})
+```
+
+**Cancel a task** (optional):
+```
+cancel_background_task({ "task_number": 3 })
+```
+
+**Decision guide — task vs background_task:**
+| Scenario | Use |
+|----------|-----|
+| Single quick lookup | `task` |
+| Need result before next step | `task` |
+| 2+ independent tasks | `background_task` for ALL of them |
+| Long-running research or analysis | `background_task` |
+| Multi-file exploration in parallel | `background_task` |
+
+**Important:** You MUST always provide `description` AND `subagent_type` for `background_task`. Calling `background_task({})` will fail.
 
 ---
 
@@ -537,19 +581,25 @@ This is the discipline: understand existing patterns, follow them, register prop
 
 ## Summary of Required Parameters
 
-| Tool       | Required Parameters                          | What Fails Without Them          |
-|------------|----------------------------------------------|----------------------------------|
-| read       | filePath                                     | "filePath is required"           |
-| list       | (none — all optional)                        | —                                |
-| glob       | pattern                                      | "pattern is required"            |
-| grep       | pattern                                      | "pattern is required"            |
-| edit       | filePath, oldString, newString               | "filePath is required"           |
-| write      | filePath, content                            | "filePath is required"           |
-| bash       | command, description                         | "command is required"            |
-| task       | description, prompt, subagent_type           | "description is required"        |
-| webfetch   | url                                          | "url is required"                |
-| websearch  | query                                        | "query is required"              |
-| todowrite  | todos                                        | "todos is required"              |
-| skill      | name                                         | "name is required"               |
+| Tool                  | Required Parameters                          | What Fails Without Them          |
+|-----------------------|----------------------------------------------|----------------------------------|
+| read                  | filePath                                     | "filePath is required"           |
+| list                  | (none — all optional)                        | —                                |
+| glob                  | pattern                                      | "pattern is required"            |
+| grep                  | pattern                                      | "pattern is required"            |
+| edit                  | filePath, oldString, newString               | "filePath is required"           |
+| write                 | filePath, content                            | "filePath is required"           |
+| bash                  | command, description                         | "command is required"            |
+| task                  | description, prompt, subagent_type           | "description is required"        |
+| background_task       | description, subagent_type                   | "description is required"        |
+| task_progress         | task_number                                  | "task_number is required"        |
+| wait_background_task  | (none — all optional)                        | —                                |
+| cancel_background_task| task_number                                  | "task_number is required"        |
+| webfetch              | url                                          | "url is required"                |
+| websearch             | query                                        | "query is required"              |
+| todowrite             | todos                                        | "todos is required"              |
+| skill                 | name                                         | "name is required"               |
 
 NEVER call a tool with empty arguments `{}`. Every tool call must include all required parameters listed above.
+
+**CRITICAL REMINDER:** NEVER call multiple `task` tools in the same message — this will crash. Use `background_task` for parallel subagent work.

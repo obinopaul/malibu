@@ -245,6 +245,14 @@ export namespace HarnessProcessor {
       const props = evt.properties
       if (props.sessionID !== input.sessionID) return
 
+      log.info("toolStart:received", {
+        callId: props.toolCallId,
+        tool: props.tool,
+        hasArgs: !!props.args,
+        argsKeys: props.args ? Object.keys(props.args) : [],
+        argsType: typeof props.args,
+      })
+
       // Finalize current text part before tool execution
       if (currentTextPart) {
         currentTextPart.text = currentTextPart.text.trimEnd()
@@ -345,9 +353,26 @@ export namespace HarnessProcessor {
       const state = match.state as any
       const args = (() => {
         const current = state?.input ?? {}
+        const incoming = p.args ?? {}
+        // Prefer whichever source has more data — ToolEnd args (incoming)
+        // are authoritative since they're captured after full streaming.
+        if (Object.keys(incoming).length > Object.keys(current).length) return incoming
         if (Object.keys(current).length > 0) return current
-        return p.args ?? {}
+        return incoming
       })()
+
+      log.info("finishTool:data", {
+        callId: id,
+        tool: p.tool,
+        stateInputKeys: state?.input ? Object.keys(state.input) : [],
+        stateInputEmpty: !state?.input || Object.keys(state.input).length === 0,
+        pArgsKeys: p.args ? Object.keys(p.args) : [],
+        finalArgsKeys: Object.keys(args),
+        hasMeta: !!meta,
+        metaKeys: meta ? Object.keys(meta) : [],
+        metaMetadataKeys: meta?.metadata ? Object.keys(meta.metadata) : [],
+        outputLen: p.output?.length ?? 0,
+      })
       const status = meta?.status ?? p.status ?? "completed"
 
       await Session.updatePart({
@@ -400,6 +425,7 @@ export namespace HarnessProcessor {
         callId: props.toolCallId,
         tool: props.tool,
         output: props.output,
+        args: props.args,
       })
     })
 
