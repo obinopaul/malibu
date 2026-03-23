@@ -1,8 +1,8 @@
 /**
- * Sub-Agents — defines DeepAgent SubAgent objects for explore and general agents.
+ * Sub-Agents — defines SubAgent objects for explore and general agents.
  *
- * These SubAgent objects are passed to createDeepAgent({ subagents: [...] })
- * and automatically wired through DeepAgent's built-in `task` tool.
+ * These SubAgent objects are passed to createMalibuAgent({ subagents: [...] })
+ * and automatically wired through the SubAgentMiddleware's `task` tool.
  * When the LLM wants to delegate work, it calls the `task` tool with
  * the sub-agent name and instruction.
  */
@@ -30,10 +30,10 @@ const EXPLORE_TOOLS = new Set([
 const GENERAL_DENIED_TOOLS = new Set(["todoread", "todowrite"])
 
 /**
- * Tools that truly duplicate DeepAgent middleware functionality.
- * Only these are filtered — filesystem tools (read, write, edit, glob, grep, list)
- * are kept because createToolOverrideMiddleware in harness.ts hides the built-in
- * filesystem tools from the model, so Malibu's richer versions are used.
+ * Tools that duplicate middleware functionality and should NOT be passed
+ * as custom tools to createMalibuAgent or sub-agents.
+ * - "task" duplicates SubAgentMiddleware's task tool
+ * - "todowrite"/"todoread" duplicate TodoListMiddleware
  */
 const MIDDLEWARE_ONLY_TOOLS = new Set([
   "task",       // DeepAgent: SubAgentMiddleware task tool
@@ -53,11 +53,11 @@ export interface SubAgentBuildContext {
 }
 
 /**
- * Build DeepAgent SubAgent objects for the explore and general agents.
- * These are passed to createDeepAgent({ subagents: [...] }).
+ * Build SubAgent objects for the explore and general agents.
+ * These are passed to createMalibuAgent({ subagents: [...] }).
  *
- * DeepAgent's `task` tool handles dispatch automatically — when the LLM
- * wants to delegate, it calls `task(name="explore", instruction="...")`.
+ * The SubAgentMiddleware's `task` tool handles dispatch automatically — when
+ * the LLM wants to delegate, it calls `task(name="explore", instruction="...")`.
  */
 export async function buildSubAgents(
   ctx: SubAgentBuildContext,
