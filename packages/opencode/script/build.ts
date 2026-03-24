@@ -179,17 +179,6 @@ for (const item of targets) {
     tsconfig: "./tsconfig.json",
     plugins: [
       solidPlugin,
-      {
-        name: "langchain-node-resolver",
-        setup(build) {
-          // Force langchain to use Node entry (not browser) so deepagents can
-          // import countTokensApproximately and other Node-only exports
-          build.onResolve({ filter: /^langchain$/ }, () => ({
-            path: "langchain/dist/index.js",
-            namespace: "node-resolve",
-          }))
-        },
-      },
     ],
     compile: {
       autoloadBunfig: false,
