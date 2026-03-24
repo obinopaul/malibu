@@ -2726,7 +2726,7 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
         <box flexDirection="column" marginTop={1}>
           <text fg={theme.textMuted}>{"─".repeat(40)}</text>
           <box flexDirection="row" gap={1} paddingLeft={1}>
-            <text style={{ bold: true }} fg={theme.text}>Todos</text>
+            <text fg={theme.text}><span style={{ bold: true }}>Todos</span></text>
             <text fg={theme.textMuted}>{score()}</text>
           </box>
           <box flexDirection="column" paddingLeft={1} paddingTop={1}>
@@ -2773,7 +2773,7 @@ function TodoRead(props: ToolProps<any>) {
         <box flexDirection="column" marginTop={1}>
           <text fg={theme.textMuted}>{"─".repeat(40)}</text>
           <box flexDirection="row" gap={1} paddingLeft={1}>
-            <text style={{ bold: true }} fg={theme.text}>Todos</text>
+            <text fg={theme.text}><span style={{ bold: true }}>Todos</span></text>
             <text fg={theme.textMuted}>{score()}</text>
           </box>
           <box flexDirection="column" paddingLeft={1} paddingTop={1}>
