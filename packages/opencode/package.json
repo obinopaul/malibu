@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.2.27",
+  "version": "0.1.0",
   "name": "malibu",
   "type": "module",
   "license": "MIT",

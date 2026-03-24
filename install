@@ -197,8 +197,14 @@ else
         url="https://github.com/obinopaul/malibu/releases/latest/download/$filename"
         specific_version=$(curl -s https://api.github.com/repos/obinopaul/malibu/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
 
+        # Fallback: fetch version from package.json in the repo if no releases exist yet
+        if [[ -z "$specific_version" ]]; then
+            specific_version=$(curl -s "https://raw.githubusercontent.com/obinopaul/malibu/main/packages/opencode/package.json" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
+        fi
+
         if [[ $? -ne 0 || -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
+            echo -e "${MUTED}No releases found. Create one with: git tag v0.1.0 && git push origin v0.1.0${NC}"
             exit 1
         fi
     else

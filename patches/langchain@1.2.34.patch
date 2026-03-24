@@ -1,0 +1,12 @@
+diff --git a/package.json b/package.json
+index 1234567..abcdefg 100644
+--- a/package.json
++++ b/package.json
+@@ -90,7 +90,6 @@
+   "types": "./dist/index.d.cts",
+   "exports": {
+     ".": {
+-      "browser": "./dist/browser.js",
+       "input": "./src/index.ts",
+       "require": {
+         "types": "./dist/index.d.cts",
