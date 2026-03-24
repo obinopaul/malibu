@@ -213,7 +213,7 @@ describe("installation", () => {
         () => jsonResponse({ versions: { stable: "2.0.0" } }),
         (cmd, args) => {
           // getBrewFormula: return core formula (no tap)
-          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/malibu")) return ""
+          if (cmd === "brew" && args.includes("--formula") && args.includes("obinopaul/tap/malibu")) return ""
           if (cmd === "brew" && args.includes("--formula") && args.includes("malibu")) return "malibu"
           return ""
         },
@@ -232,7 +232,7 @@ describe("installation", () => {
       const layer = testLayer(
         () => jsonResponse({}), // HTTP not used for tap formula
         (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/malibu") && args.includes("--formula")) return "malibu"
+          if (cmd === "brew" && args.includes("obinopaul/tap/malibu") && args.includes("--formula")) return "malibu"
           if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
           return ""
         },

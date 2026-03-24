@@ -406,7 +406,7 @@ jobs:
           persist-credentials: false
 
       - name: Run malibu
-        uses: anomalyco/malibu/github@latest${envStr}
+        uses: obinopaul/malibu/github@latest${envStr}
         with:
           model: ${provider}/${model}`,
             )

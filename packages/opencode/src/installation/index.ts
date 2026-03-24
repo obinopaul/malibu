@@ -246,8 +246,8 @@ export namespace Installation {
         )
 
         const getBrewFormula = Effect.fnUntraced(function* () {
-          const tapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/malibu"])
-          if (tapFormula.includes("malibu")) return "anomalyco/tap/malibu"
+          const tapFormula = yield* text(["brew", "list", "--formula", "obinopaul/tap/malibu"])
+          if (tapFormula.includes("malibu")) return "obinopaul/tap/malibu"
           const coreFormula = yield* text(["brew", "list", "--formula", "malibu"])
           if (coreFormula.includes("malibu")) return "malibu"
           return "malibu"
@@ -362,7 +362,7 @@ export namespace Installation {
           }
 
           const response = yield* httpOk.execute(
-            HttpClientRequest.get("https://api.github.com/repos/anomalyco/malibu/releases/latest").pipe(
+            HttpClientRequest.get("https://api.github.com/repos/obinopaul/malibu/releases/latest").pipe(
               HttpClientRequest.acceptJson,
             ),
           )
@@ -389,12 +389,12 @@ export namespace Installation {
               const formula = yield* getBrewFormula()
               const env = { HOMEBREW_NO_AUTO_UPDATE: "1" }
               if (formula.includes("/")) {
-                const tap = yield* run(["brew", "tap", "anomalyco/tap"], { env })
+                const tap = yield* run(["brew", "tap", "obinopaul/tap"], { env })
                 if (tap.code !== 0) {
                   result = tap
                   break
                 }
-                const repo = yield* text(["brew", "--repo", "anomalyco/tap"])
+                const repo = yield* text(["brew", "--repo", "obinopaul/tap"])
                 const dir = repo.trim()
                 if (dir) {
                   const pull = yield* run(["git", "pull", "--ff-only"], { cwd: dir, env })

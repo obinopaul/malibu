@@ -1,85 +1,23 @@
 <p align="center">
-  <a href="https://malibu.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="Malibu logo">
-    </picture>
-  </a>
+  <h1 align="center">Malibu</h1>
 </p>
-<p align="center">The open source AI coding agent.</p>
+<p align="center">The open source AI coding agent for the terminal.</p>
 <p align="center">
-  <a href="https://malibu.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/malibu-ai"><img alt="npm" src="https://img.shields.io/npm/v/malibu-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/malibu/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/malibu/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/obinopaul/malibu/actions/workflows/release.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/obinopaul/malibu/release.yml?style=flat-square&branch=main" /></a>
+  <a href="https://github.com/obinopaul/malibu"><img alt="GitHub stars" src="https://img.shields.io/github/stars/obinopaul/malibu?style=flat-square" /></a>
 </p>
-
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
-
-[![Malibu Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://malibu.ai)
 
 ---
 
 ### Installation
 
 ```bash
-# YOLO
-curl -fsSL https://malibu.ai/install | bash
+# Quick install (curl)
+curl -fsSL https://raw.githubusercontent.com/obinopaul/malibu/main/install | bash
 
-# Package managers
+# npm (all platforms)
 npm i -g malibu-ai@latest          # or bun/pnpm/yarn
-scoop install malibu               # Windows
-choco install malibu               # Windows
-brew install anomalyco/tap/malibu  # macOS and Linux (recommended, always up to date)
-brew install malibu                # macOS and Linux (official brew formula, updated less)
-sudo pacman -S malibu              # Arch Linux (Stable)
-paru -S malibu-bin                 # Arch Linux (Latest from AUR)
-mise use -g malibu                 # Any OS
-nix run nixpkgs#malibu             # or github:anomalyco/malibu for latest dev branch
-```
-
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
-
-### Desktop App (BETA)
-
-Malibu is also available as a desktop application. Download directly from the [releases page](https://github.com/anomalyco/malibu/releases) or [malibu.ai/download](https://malibu.ai/download).
-
-| Platform              | Download                              |
-| --------------------- | ------------------------------------- |
-| macOS (Apple Silicon) | `malibu-desktop-darwin-aarch64.dmg`   |
-| macOS (Intel)         | `malibu-desktop-darwin-x64.dmg`       |
-| Windows               | `malibu-desktop-windows-x64.exe`      |
-| Linux                 | `.deb`, `.rpm`, or AppImage           |
-
-```bash
-# macOS (Homebrew)
-brew install --cask malibu-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/malibu-desktop
 ```
 
 #### Installation Directory
@@ -88,13 +26,13 @@ The install script respects the following priority order for the installation pa
 
 1. `$MALIBU_INSTALL_DIR` - Custom installation directory
 2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
+3. `$HOME/bin` - Standard user binary directory (if it exists)
 4. `$HOME/.malibu/bin` - Default fallback
 
 ```bash
 # Examples
-MALIBU_INSTALL_DIR=/usr/local/bin curl -fsSL https://malibu.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://malibu.ai/install | bash
+MALIBU_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/obinopaul/malibu/main/install | bash
+XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://raw.githubusercontent.com/obinopaul/malibu/main/install | bash
 ```
 
 ### Agents
@@ -110,19 +48,30 @@ Malibu includes two built-in agents you can switch between with the `Tab` key.
 Also included is a **general** subagent for complex searches and multistep tasks.
 This is used internally and can be invoked using `@general` in messages.
 
-Learn more about [agents](https://malibu.ai/docs/agents).
+### Features
 
-### Documentation
+- Provider-agnostic: works with Claude, OpenAI, Google, or local models
+- 100% open source (MIT)
+- Out-of-the-box LSP support
+- Terminal UI (TUI) focused
+- Client/server architecture
+- MCP (Model Context Protocol) support
 
-For more info on how to configure Malibu, [**head over to our docs**](https://malibu.ai/docs).
+### Development
+
+```bash
+# Clone and install
+git clone https://github.com/obinopaul/malibu.git
+cd malibu
+bun install
+
+# Run in dev mode
+bun run dev
+```
 
 ### Contributing
 
 If you're interested in contributing to Malibu, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
-
-### Building on Malibu
-
-If you are working on a project that's related to Malibu and is using "malibu" as part of its name, for example "malibu-dashboard" or "malibu-mobile", please add a note to your README to clarify that it is not built by the Malibu team and is not affiliated with us in any way.
 
 ### FAQ
 
@@ -131,11 +80,11 @@ If you are working on a project that's related to Malibu and is using "malibu" a
 It's very similar to Claude Code in terms of capability. Here are the key differences:
 
 - 100% open source
-- Not coupled to any provider. Although we recommend the models we provide through [Malibu Zen](https://malibu.ai/zen), Malibu can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
+- Not coupled to any provider. Malibu can be used with Claude, OpenAI, Google, or even local models. As models evolve, the gaps between them will close and pricing will drop, so being provider-agnostic is important.
 - Out-of-the-box LSP support
-- A focus on TUI. Malibu is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
-- A client/server architecture. This, for example, can allow Malibu to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.
+- A focus on TUI — pushing the limits of what's possible in the terminal.
+- A client/server architecture. This, for example, can allow Malibu to run on your computer while you drive it remotely from a mobile app.
 
 ---
 
-**Join our community** [Discord](https://discord.gg/malibu) | [X.com](https://x.com/malibu)
+**GitHub:** [obinopaul/malibu](https://github.com/obinopaul/malibu)
