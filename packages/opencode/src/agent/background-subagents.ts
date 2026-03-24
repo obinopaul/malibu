@@ -17,9 +17,7 @@
  */
 
 import { z } from "zod"
-// @ts-expect-error — tsgo browser condition misses agent exports
 import { createAgent, createMiddleware, tool, SystemMessage } from "langchain"
-// @ts-expect-error — tsgo browser condition misses these types
 import type { AgentMiddleware, ToolRuntime } from "langchain"
 import type { StructuredTool } from "@langchain/core/tools"
 import { ToolMessage, HumanMessage } from "@langchain/core/messages"
@@ -504,7 +502,7 @@ function buildSubagentGraphs(
       systemPrompt: sub.systemPrompt ?? `You are a ${sub.name} agent. Complete the task described in the user message.`,
       name: `bg-${sub.name}`,
     })
-    agents[sub.name] = agent
+    agents[sub.name] = agent as any
     descriptions.push(`- **${sub.name}**: ${sub.description}`)
   }
 
@@ -1076,7 +1074,7 @@ export function createBackgroundSubAgentMiddleware(
   const middleware = createMiddleware({
     name: "backgroundSubAgentMiddleware",
     tools: [backgroundTaskTool, taskProgressTool, waitTool, cancelTool],
-    stateSchema: BackgroundTaskStateSchema,
+    stateSchema: BackgroundTaskStateSchema as any,
     wrapModelCall: async (request: any, handler: any) => {
       if (systemPrompt !== null) {
         return handler({

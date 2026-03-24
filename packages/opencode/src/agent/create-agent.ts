@@ -16,11 +16,7 @@
  * 7. cacheBreakpointMiddleware — cache breakpoint (conditional, Anthropic)
  * 8. user custom middleware
  */
-// tsgo resolves langchain via the "browser" customCondition which lacks agent exports.
-// Bun resolves via "input" condition (source .ts) which has all exports. Safe at runtime.
-// @ts-expect-error — tsgo browser condition misses agent exports
 import { createAgent, createMiddleware, todoListMiddleware, anthropicPromptCachingMiddleware, SystemMessage } from "langchain"
-// @ts-expect-error — tsgo browser condition misses AgentMiddleware type
 import type { AgentMiddleware } from "langchain"
 import type { StructuredTool } from "@langchain/core/tools"
 import type { BaseCheckpointSaver } from "@langchain/langgraph-checkpoint"
@@ -118,7 +114,7 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
   // - Here: gives subagents their own todo tracking
   // - In builtInMiddleware: gives the main agent todo tracking
   const subagentMiddleware: AgentMiddleware[] = [
-    todoListMiddleware(),
+    todoListMiddleware() as any,
     createSummarizationMiddleware({ model, backend }),
     createPatchToolCallsMiddleware(),
   ]
@@ -132,6 +128,7 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
   // --- Anthropic caching middleware ---
   const anthropicMiddleware: AgentMiddleware[] = isAnthropicModel
     ? [
+        // @ts-expect-error — langchain type instantiation too deep for tsgo
         anthropicPromptCachingMiddleware({
           unsupportedModelBehavior: "ignore",
           minMessagesToCache: 1,
@@ -151,7 +148,7 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
   // --- Built-in middleware (NO filesystem middleware from deepagents) ---
   const builtInMiddleware: AgentMiddleware[] = [
     // 1. Todo list management
-    todoListMiddleware(),
+    todoListMiddleware() as any,
     // 2. Sub-agent delegation (explore, general via sync task tool)
     createSubAgentMiddleware({
       defaultModel: model,
