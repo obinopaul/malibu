@@ -109,6 +109,7 @@ jobs:
         working-directory: packages/opencode
         run: bun run script/publish.ts
         env:
+          MALIBU_VERSION: ${{ github.ref_name }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
