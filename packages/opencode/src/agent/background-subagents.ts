@@ -61,6 +61,8 @@ export interface BackgroundTaskRecord {
   completedAt?: string
   result?: string
   error?: string
+  toolCount?: number
+  tokenUsage?: number
 }
 
 /** Shape of the background task state channel. */
@@ -82,6 +84,8 @@ const BackgroundTaskRecordSchema = z.object({
   completedAt: z.string().optional(),
   result: z.string().optional(),
   error: z.string().optional(),
+  toolCount: z.number().optional(),
+  tokenUsage: z.number().optional(),
 })
 
 /**
@@ -282,11 +286,23 @@ export class BackgroundTaskRegistry {
     return new Map(this.tasks)
   }
 
+  /** Store extracted metrics for a task. */
+  private metrics = new Map<string, { toolCount: number; tokenUsage: number }>()
+
+  setMetrics(taskId: string, metrics: { toolCount: number; tokenUsage: number }): void {
+    this.metrics.set(taskId, metrics)
+  }
+
+  getMetrics(taskId: string): { toolCount: number; tokenUsage: number } | undefined {
+    return this.metrics.get(taskId)
+  }
+
   /** Clear all tasks and reset numbering. */
   clear(): void {
     this.tasks.clear()
     this.numberToId.clear()
     this.idToNumber.clear()
+    this.metrics.clear()
     this.nextTaskNumber = 1
   }
 }
@@ -321,6 +337,32 @@ export function extractResultContent(result: Record<string, unknown>): string {
       .join("\n")
   }
   return content
+}
+
+/**
+ * Extract tool count and token usage from subagent result messages.
+ */
+export function extractMetrics(result: Record<string, unknown>): {
+  toolCount: number
+  tokenUsage: number
+} {
+  const messages = result.messages as BaseMessage[] | undefined
+  if (!messages) return { toolCount: 0, tokenUsage: 0 }
+
+  let toolCount = 0
+  let tokenUsage = 0
+
+  for (const msg of messages) {
+    if (msg instanceof ToolMessage) {
+      toolCount++
+    }
+    const usage = (msg as any).usage_metadata
+    if (usage?.total_tokens) {
+      tokenUsage += usage.total_tokens
+    }
+  }
+
+  return { toolCount, tokenUsage }
 }
 
 // ---------------------------------------------------------------------------
@@ -518,10 +560,25 @@ export function buildBackgroundTaskTool(
 
       const taskId = crypto.randomUUID()
 
-      // Fire and forget — do NOT await
-      const resultPromise = subagent.invoke(subagentState) as Promise<
+      // Fire and forget — do NOT await.
+      // Pass explicit empty callbacks to prevent the background subagent from
+      // inheriting the parent graph's StreamMessagesHandler via AsyncLocalStorage.
+      // Without this, the subagent's LLM tokens flow through the parent's stream
+      // controller, causing ERR_INVALID_STATE after the parent stream closes.
+      const resultPromise = subagent.invoke(subagentState, { callbacks: [] }) as Promise<
         Record<string, unknown>
       >
+
+      // Capture metrics when the subagent completes
+      resultPromise.then(
+        (result) => {
+          const metrics = extractMetrics(result)
+          registry.setMetrics(taskId, metrics)
+        },
+        () => {
+          // On error, no metrics to capture
+        },
+      )
 
       const taskNumber = registry.register(taskId, resultPromise)
       const toolCallId = toolCallIdFromRuntime(runtime)
@@ -613,6 +670,7 @@ export function buildTaskProgressTool(registry: BackgroundTaskRegistry) {
       }
 
       const elapsed = Math.round((Date.now() - wrapper.startTime) / 1000)
+      const metrics = registry.getMetrics(taskId)
 
       const updatedRecord = mergeRecord(existing, {
         taskId,
@@ -621,6 +679,7 @@ export function buildTaskProgressTool(registry: BackgroundTaskRegistry) {
         ...(status !== "running" && { completedAt: new Date().toISOString() }),
         ...(resultContent && { result: resultContent }),
         ...(errorContent && { error: errorContent }),
+        ...(metrics && { toolCount: metrics.toolCount, tokenUsage: metrics.tokenUsage }),
       })
 
       const message =
@@ -681,6 +740,8 @@ export function buildWaitTool(
 
         const { taskId, wrapper } = entry
         const existing = getExistingRecord(taskId, state)
+        const metrics = registry.getMetrics(taskId)
+        const metricsUpdate = metrics ? { toolCount: metrics.toolCount, tokenUsage: metrics.tokenUsage } : {}
 
         // Already done
         if (wrapper.status !== "pending") {
@@ -703,6 +764,7 @@ export function buildWaitTool(
             status,
             completedAt: new Date().toISOString(),
             ...(isSuccess ? { result: resultContent } : { error: resultContent }),
+            ...metricsUpdate,
           })
 
           if (!toolCallId) return message
@@ -731,6 +793,7 @@ export function buildWaitTool(
             status: "success" as BackgroundTaskStatus,
             completedAt: new Date().toISOString(),
             result: resultContent,
+            ...metricsUpdate,
           })
 
           if (!toolCallId) return message
@@ -758,6 +821,7 @@ export function buildWaitTool(
             status,
             ...(isTimeout ? {} : { completedAt: new Date().toISOString() }),
             error: errorMsg,
+            ...metricsUpdate,
           })
 
           if (!toolCallId) return errorMsg
@@ -797,10 +861,12 @@ export function buildWaitTool(
 
         lines.push(`### Task-${taskNumber}: **${resultStatus}**\n${content}`)
 
+        const taskMetrics = registry.getMetrics(taskId)
         stateUpdates[taskId] = mergeRecord(existing, {
           status: resultStatus,
           completedAt: new Date().toISOString(),
           ...(isError ? { error: String(content) } : { result: String(content) }),
+          ...(taskMetrics && { toolCount: taskMetrics.toolCount, tokenUsage: taskMetrics.tokenUsage }),
         })
       }
 
@@ -813,14 +879,26 @@ export function buildWaitTool(
         ? lines.join("\n\n")
         : "No background tasks to wait for."
 
-      if (!toolCallId) return message
+      // Append structured metadata for TUI rendering
+      const taskSummaries = Object.values(stateUpdates).map((r) => ({
+        taskId: r.taskId,
+        taskNumber: r.taskNumber,
+        agentName: r.agentName,
+        description: r.description,
+        status: r.status,
+        toolCount: r.toolCount,
+        tokenUsage: r.tokenUsage,
+      }))
+      const messageWithMeta = message + "\n\n<!-- BACKGROUND_TASKS:" + JSON.stringify(taskSummaries) + " -->"
+
+      if (!toolCallId) return messageWithMeta
 
       return new Command({
         update: {
           backgroundTasks: stateUpdates,
           messages: [
             new ToolMessage({
-              content: message,
+              content: messageWithMeta,
               tool_call_id: toolCallId,
               name: "wait_background_task",
             }),

@@ -1,4 +1,5 @@
 import { useTheme } from "../context/theme"
+import { TextAttributes } from "@opentui/core"
 
 export interface TodoItemProps {
   status: string
@@ -8,22 +9,58 @@ export interface TodoItemProps {
 export function TodoItem(props: TodoItemProps) {
   const { theme } = useTheme()
 
+  const icon = () => {
+    switch (props.status) {
+      case "completed":
+        return "✓"
+      case "in_progress":
+        return "»"
+      case "cancelled":
+        return "✗"
+      default:
+        return "☐"
+    }
+  }
+
+  const iconColor = () => {
+    switch (props.status) {
+      case "completed":
+        return theme.success
+      case "in_progress":
+        return theme.accent
+      case "cancelled":
+        return theme.error
+      default:
+        return theme.textMuted
+    }
+  }
+
+  const textColor = () => {
+    switch (props.status) {
+      case "in_progress":
+        return theme.text
+      case "cancelled":
+        return theme.error
+      default:
+        return theme.textMuted
+    }
+  }
+
+  const strikethrough = () => props.status === "cancelled"
+
   return (
-    <box flexDirection="row" gap={0}>
+    <box flexDirection="row" gap={1}>
       <text
         flexShrink={0}
-        style={{
-          fg: props.status === "in_progress" ? theme.warning : theme.textMuted,
-        }}
+        fg={iconColor()}
       >
-        [{props.status === "completed" ? "✓" : props.status === "in_progress" ? "•" : " "}]{" "}
+        {icon()}
       </text>
       <text
         flexGrow={1}
         wrapMode="word"
-        style={{
-          fg: props.status === "in_progress" ? theme.warning : theme.textMuted,
-        }}
+        fg={textColor()}
+        attributes={strikethrough() ? TextAttributes.STRIKETHROUGH : undefined}
       >
         {props.content}
       </text>

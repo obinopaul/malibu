@@ -47,6 +47,15 @@ const TOOL_TITLES: Record<string, string> = {
   todowrite: "TodoWrite",
   todoread: "TodoRead",
   task: "Task",
+  multiedit: "MultiEdit",
+  background_task: "BackgroundTask",
+  task_progress: "TaskProgress",
+  wait_background_task: "WaitBackgroundTask",
+  cancel_background_task: "CancelBackgroundTask",
+  plan_exit: "PlanExit",
+  invalid: "Invalid",
+  batch: "Batch",
+  lsp: "LSP",
   // Legacy aliases for existing sessions
   read_file: "Read",
   write_file: "Write",
@@ -179,6 +188,34 @@ export namespace HarnessProcessor {
       type: "step-start",
     })
 
+    // Safe wrappers for DB writes inside Bus subscribers.
+    // When the stream errors out, async subscribers may fire for messages whose
+    // parent rows are already cleaned up, causing FK constraint violations.
+    async function safeUpdatePart(part: any) {
+      try {
+        return await Session.updatePart(part)
+      } catch (err: any) {
+        log.warn("updatePart failed (likely stale message)", {
+          partId: part.id,
+          messageId: part.messageID,
+          error: err.message ?? String(err),
+        })
+        return part
+      }
+    }
+
+    async function safeUpdatePartDelta(delta: any) {
+      try {
+        return await Session.updatePartDelta(delta)
+      } catch (err: any) {
+        log.warn("updatePartDelta failed (likely stale message)", {
+          partId: delta.partID,
+          messageId: delta.messageID,
+          error: err.message ?? String(err),
+        })
+      }
+    }
+
     // Set up incremental streaming via bus event subscriptions
     let currentTextPart: MessageV2.TextPart | undefined
     let reasoningParts: Record<string, MessageV2.ReasoningPart> = {}
@@ -198,11 +235,11 @@ export namespace HarnessProcessor {
           text: "",
           time: { start: Date.now() },
         }
-        await Session.updatePart(currentTextPart)
+        await safeUpdatePart(currentTextPart)
       }
 
       currentTextPart.text += props.text
-      await Session.updatePartDelta({
+      await safeUpdatePartDelta({
         sessionID: input.sessionID,
         messageID: input.assistantMessage.id,
         partID: currentTextPart.id,
@@ -226,12 +263,12 @@ export namespace HarnessProcessor {
           time: { start: Date.now() },
         }
         reasoningParts[props.id] = part
-        await Session.updatePart(part)
+        await safeUpdatePart(part)
       }
 
       const rPart = reasoningParts[props.id]
       rPart.text += props.text
-      await Session.updatePartDelta({
+      await safeUpdatePartDelta({
         sessionID: input.sessionID,
         messageID: input.assistantMessage.id,
         partID: rPart.id,
@@ -267,14 +304,14 @@ export namespace HarnessProcessor {
         )
         currentTextPart.text = textOutput.text
         currentTextPart.time = { start: currentTextPart.time?.start ?? Date.now(), end: Date.now() }
-        await Session.updatePart(currentTextPart)
+        await safeUpdatePart(currentTextPart)
         currentTextPart = undefined
       }
 
       const existing = toolcalls[props.toolCallId]
       if (existing) {
         const state = existing.state as any
-        const part = await Session.updatePart({
+        const part = await safeUpdatePart({
           ...existing,
           tool: props.tool,
           callID: props.toolCallId,
@@ -295,7 +332,7 @@ export namespace HarnessProcessor {
         return
       }
 
-      const part = await Session.updatePart({
+      const part = await safeUpdatePart({
         id: PartID.ascending(),
         messageID: input.assistantMessage.id,
         sessionID: input.sessionID,
@@ -375,7 +412,7 @@ export namespace HarnessProcessor {
       })
       const status = meta?.status ?? p.status ?? "completed"
 
-      await Session.updatePart({
+      await safeUpdatePart({
         ...match,
         state: status === "completed"
           ? {

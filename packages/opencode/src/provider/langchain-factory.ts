@@ -19,6 +19,26 @@ import { Log } from "../util/log"
 
 const log = Log.create({ service: "langchain-factory" })
 
+/**
+ * Dereference $ref in Google/Gemini tool function declarations.
+ * Walks the tools array returned by invocationParams and inlines all $ref.
+ */
+function derefToolDeclarations(tools: any[]): any[] {
+  return tools.map((toolGroup: any) => {
+    if (!toolGroup.functionDeclarations) return toolGroup
+    return {
+      ...toolGroup,
+      functionDeclarations: toolGroup.functionDeclarations.map((fn: any) => {
+        if (!fn.parameters) return fn
+        return {
+          ...fn,
+          parameters: ProviderTransform.derefJsonSchema(fn.parameters),
+        }
+      }),
+    }
+  })
+}
+
 export type LangChainModelOptions = {
   temperature?: number
   maxTokens?: number
@@ -203,7 +223,7 @@ const STANDARD_PROVIDERS: Record<string, ProviderFactory> = {
     const resolved = await resolveProviderAuth(model, "GOOGLE_API_KEY", options)
     const maxOutputTokens = options.maxTokens ?? ProviderTransform.maxOutputTokens(model)
 
-    return new ChatGoogleGenerativeAI({
+    const chatModel = new ChatGoogleGenerativeAI({
       model: model.id,
       apiKey: resolved.apiKey,
       // ChatGoogleGenerativeAI does not support custom fetch or custom headers
@@ -212,6 +232,19 @@ const STANDARD_PROVIDERS: Record<string, ProviderFactory> = {
       maxOutputTokens,
       streaming: options.streaming ?? true,
     })
+
+    // Patch invocationParams to dereference $ref in tool schemas.
+    // Google's Gemini API rejects JSON Schema $ref references.
+    const origInvocationParams = chatModel.invocationParams.bind(chatModel)
+    chatModel.invocationParams = (opts?: any) => {
+      const params = origInvocationParams(opts)
+      if (params.tools) {
+        params.tools = derefToolDeclarations(params.tools)
+      }
+      return params
+    }
+
+    return chatModel
   },
 
   async "google-vertex"(model, options) {
@@ -223,12 +256,24 @@ const STANDARD_PROVIDERS: Record<string, ProviderFactory> = {
     void resolved // side-effect only — Vertex uses ADC, not explicit credentials
     const maxOutputTokens = options.maxTokens ?? ProviderTransform.maxOutputTokens(model)
 
-    return new ChatVertexAI({
+    const chatModel = new ChatVertexAI({
       model: model.id,
       temperature: options.temperature,
       maxOutputTokens,
       streaming: options.streaming ?? true,
     })
+
+    // Patch invocationParams for Vertex too — same $ref issue as Google GenAI
+    const origInvocationParams = chatModel.invocationParams.bind(chatModel)
+    chatModel.invocationParams = (opts?: any) => {
+      const params = origInvocationParams(opts)
+      if (params.tools) {
+        params.tools = derefToolDeclarations(params.tools)
+      }
+      return params
+    }
+
+    return chatModel
   },
 
   async groq(model, options) {
@@ -306,6 +351,10 @@ const STANDARD_PROVIDERS: Record<string, ProviderFactory> = {
 
   async perplexity(model, options) {
     return createOpenAICompatible(model, options, "PERPLEXITY_API_KEY", "https://api.perplexity.ai")
+  },
+
+  async huggingface(model, options) {
+    return createOpenAICompatible(model, options, "HF_TOKEN", "https://router.huggingface.co/v1")
   },
 }
 

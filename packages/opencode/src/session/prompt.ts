@@ -792,7 +792,7 @@ export namespace SessionPrompt {
         }
       }
 
-      if (result === "stop") break
+      if (result === "stop") continue
       if (result === "compact") {
         await SessionCompaction.create({
           sessionID,

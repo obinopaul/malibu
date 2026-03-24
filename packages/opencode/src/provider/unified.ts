@@ -85,6 +85,7 @@ export namespace UnifiedProvider {
       "togetherai",
       "cerebras",
       "perplexity",
+      "huggingface",
     ]
     return [...standard, ...AI_SDK_ONLY_PROVIDERS]
   }

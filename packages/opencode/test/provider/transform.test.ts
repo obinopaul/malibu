@@ -721,6 +721,157 @@ describe("ProviderTransform.schema - gemini non-object properties removal", () =
   })
 })
 
+describe("ProviderTransform.derefJsonSchema", () => {
+  test("resolves $ref from $defs", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        item: { $ref: "#/$defs/Item" },
+      },
+      $defs: {
+        Item: { type: "object", properties: { name: { type: "string" } } },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result.properties.item.type).toBe("object")
+    expect(result.properties.item.properties.name.type).toBe("string")
+    expect(result.$defs).toBeUndefined()
+  })
+
+  test("resolves $ref from definitions", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        item: { $ref: "#/definitions/Item" },
+      },
+      definitions: {
+        Item: { type: "string" },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result.properties.item.type).toBe("string")
+    expect(result.definitions).toBeUndefined()
+  })
+
+  test("handles nested $ref", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        outer: { $ref: "#/$defs/Outer" },
+      },
+      $defs: {
+        Outer: {
+          type: "object",
+          properties: {
+            inner: { $ref: "#/$defs/Inner" },
+          },
+        },
+        Inner: { type: "number" },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result.properties.outer.properties.inner.type).toBe("number")
+  })
+
+  test("handles circular $ref by collapsing to object", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        node: { $ref: "#/$defs/Node" },
+      },
+      $defs: {
+        Node: {
+          type: "object",
+          properties: {
+            children: {
+              type: "array",
+              items: { $ref: "#/$defs/Node" },
+            },
+          },
+        },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result.properties.node.type).toBe("object")
+    expect(result.properties.node.properties.children.items.type).toBe("object")
+  })
+
+  test("handles unresolvable $ref gracefully", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        item: { $ref: "#/$defs/Missing" },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result.properties.item.type).toBe("string")
+  })
+
+  test("preserves non-$ref schemas unchanged", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        age: { type: "number" },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result).toEqual(schema)
+  })
+
+  test("$ref in array items", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: { $ref: "#/$defs/Entry" },
+        },
+      },
+      $defs: {
+        Entry: { type: "object", properties: { id: { type: "string" } } },
+      },
+    }
+    const result = ProviderTransform.derefJsonSchema(schema)
+    expect(result.properties.items.items.type).toBe("object")
+    expect(result.properties.items.items.properties.id.type).toBe("string")
+  })
+})
+
+describe("ProviderTransform.schema - gemini $ref dereferencing", () => {
+  const geminiModel = {
+    providerID: "google",
+    api: { id: "gemini-2.5-pro" },
+  } as any
+
+  test("dereferences $ref in tool schemas for Google", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        edits: {
+          type: "array",
+          items: { $ref: "#/$defs/Edit" },
+        },
+      },
+      $defs: {
+        Edit: {
+          type: "object",
+          properties: {
+            file: { type: "string" },
+            content: { type: "string" },
+          },
+          required: ["file", "content"],
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(geminiModel, schema) as any
+    expect(result.$defs).toBeUndefined()
+    expect(result.properties.edits.items.type).toBe("object")
+    expect(result.properties.edits.items.properties.file.type).toBe("string")
+  })
+})
+
 describe("ProviderTransform.message - DeepSeek reasoning content", () => {
   test("DeepSeek with tool calls includes reasoning_content in providerOptions", () => {
     const msgs = [

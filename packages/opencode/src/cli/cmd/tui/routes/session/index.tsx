@@ -1564,6 +1564,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "todowrite"}>
           <TodoWrite {...toolprops} />
         </Match>
+        <Match when={props.part.tool === "todoread"}>
+          <TodoRead {...toolprops} />
+        </Match>
         <Match when={props.part.tool === "question"}>
           <Question {...toolprops} />
         </Match>
@@ -1584,6 +1587,33 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={props.part.tool === "write_todos"}>
           <TodoWrite {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "background_task"}>
+          <BackgroundTask {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "task_progress"}>
+          <TaskProgress {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "wait_background_task"}>
+          <WaitBackgroundTask {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "cancel_background_task"}>
+          <CancelBackgroundTask {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "multiedit"}>
+          <MultiEdit {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "plan_exit"}>
+          <PlanExit {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "invalid"}>
+          <Invalid {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "batch"}>
+          <BatchTool {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "lsp"}>
+          <LspTool {...toolprops} />
         </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
@@ -2243,18 +2273,23 @@ function Task(props: ToolProps<typeof TaskTool>) {
     return assistant - first
   })
 
+  const agentType = createMemo(() => {
+    const type = props.input.subagent_type
+    if (!type) return "Task"
+    return Locale.titlecase(type)
+  })
+
   const content = createMemo(() => {
     if (!props.input.description) return ""
-    let content = [`Task ${props.input.description}`]
+    let content = [`${agentType()} ${props.input.description}`]
 
     if (isRunning() && tools().length > 0) {
-      // content[0] += ` · ${tools().length} toolcalls`
       if (current()) content.push(`↳ ${Locale.titlecase(current()!.tool)} ${(current()!.state as any).title}`)
-      else content.push(`↳ ${tools().length} toolcalls`)
+      else content.push(`↳ ${tools().length} tool uses`)
     }
 
     if (props.part.state.status === "completed") {
-      content.push(`└ ${tools().length} toolcalls · ${Locale.duration(duration())}`)
+      content.push(`└ ${tools().length} tool uses · ${Locale.duration(duration())}`)
     }
 
     return content.join("\n")
@@ -2265,7 +2300,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
       icon="│"
       spinner={isRunning()}
       complete={props.input.description}
-      pending="Delegating..."
+      pending={`Launching ${agentType().toLowerCase()} agent...`}
       part={props.part}
       onClick={() => {
         if (props.metadata.sessionId) {
@@ -2274,6 +2309,245 @@ function Task(props: ToolProps<typeof TaskTool>) {
       }}
     >
       {content()}
+    </InlineTool>
+  )
+}
+
+interface BackgroundTaskInfo {
+  taskId: string
+  taskNumber: number
+  agentName: string
+  description: string
+  status: string
+  toolCount?: number
+  tokenUsage?: number
+}
+
+function formatTokens(tokens?: number): string {
+  if (!tokens) return "0"
+  return (tokens / 1000).toFixed(1) + "k"
+}
+
+function BackgroundTaskGroup(props: { tasks: BackgroundTaskInfo[] }) {
+  const { theme } = useTheme()
+
+  const tasks = createMemo(() => props.tasks ?? [])
+  const total = createMemo(() => tasks().length)
+
+  const headerText = createMemo(() => {
+    const t = tasks()
+    if (t.length === 0) return "No background tasks"
+    const finished = t.filter((x) => x.status !== "running").length
+    const counts = new Map<string, number>()
+    for (const x of t) {
+      counts.set(x.agentName, (counts.get(x.agentName) || 0) + 1)
+    }
+    const agentParts: string[] = []
+    for (const [name, count] of counts) {
+      agentParts.push(`${count} ${Locale.titlecase(name)}`)
+    }
+    const agentStr = agentParts.join(" + ")
+    if (finished === t.length) return `${agentStr} agent${t.length !== 1 ? "s" : ""} finished`
+    return `${agentStr} agent${t.length !== 1 ? "s" : ""} (${finished}/${t.length} finished)`
+  })
+
+  const allDone = createMemo(() => tasks().length > 0 && tasks().every((t) => t.status !== "running"))
+
+  return (
+    <box flexDirection="column" paddingLeft={3}>
+      <text fg={allDone() ? theme.text : theme.warning}>
+        <span style={{ bold: true }}>{allDone() ? "●" : "○"}</span> {headerText()}
+      </text>
+      <For each={tasks()}>
+        {(task, i) => {
+          const isLast = createMemo(() => i() === total() - 1)
+          const prefix = createMemo(() => (isLast() ? "└─" : "├─"))
+          const subPrefix = createMemo(() => (isLast() ? "   " : "│  "))
+
+          const statusColor = () => {
+            switch (task.status) {
+              case "success":
+                return theme.text
+              case "error":
+                return theme.error
+              case "cancelled":
+              case "timeout":
+                return theme.textMuted
+              default:
+                return theme.warning
+            }
+          }
+
+          const statusText = () => {
+            switch (task.status) {
+              case "success":
+                return "Done"
+              case "error":
+                return "Error"
+              case "cancelled":
+                return "Cancelled"
+              case "timeout":
+                return "Timed out"
+              default:
+                return "Running..."
+            }
+          }
+
+          const metricsStr = createMemo(() => {
+            const parts: string[] = []
+            if (task.toolCount != null && task.toolCount > 0) parts.push(`${task.toolCount} tool uses`)
+            if (task.tokenUsage != null && task.tokenUsage > 0) parts.push(`${formatTokens(task.tokenUsage)} tokens`)
+            return parts.length > 0 ? " · " + parts.join(" · ") : ""
+          })
+
+          return (
+            <box flexDirection="column">
+              <text fg={theme.textMuted}>
+                {"   "}{prefix()} {Locale.titlecase(task.agentName)} {task.description}{metricsStr()}
+              </text>
+              <text fg={statusColor()}>
+                {"   "}{subPrefix()} ⎿  {statusText()}
+              </text>
+            </box>
+          )
+        }}
+      </For>
+    </box>
+  )
+}
+
+function BackgroundTask(props: ToolProps<any>) {
+  const inp = props.input as any
+  const agentType = () => inp.subagent_type ?? "agent"
+  const desc = () => inp.description ?? ""
+  const taskNum = createMemo(() => {
+    const output = props.output ?? ""
+    const match = output.match(/Task-(\d+)/)
+    return match ? match[1] : ""
+  })
+
+  return (
+    <InlineTool
+      icon="●"
+      spinner={props.part.state.status === "running"}
+      pending={`Launching ${agentType()} agent...`}
+      complete={taskNum() ? `Task-${taskNum()}` : true}
+      part={props.part}
+      outputPreview={`${Locale.titlecase(agentType())} · ${desc().slice(0, 60)}${desc().length > 60 ? "..." : ""}`}
+    >
+      {`BackgroundTask(${JSON.stringify(agentType())})`}
+    </InlineTool>
+  )
+}
+
+function TaskProgress(props: ToolProps<any>) {
+  const inp = props.input as any
+  const taskNum = () => inp.task_number ?? "?"
+
+  const statusPreview = createMemo(() => {
+    const output = props.output ?? ""
+    if (output.includes("**completed**")) return "Completed"
+    if (output.includes("**running**")) return "Running"
+    if (output.includes("**error**")) return "Error"
+    if (output.includes("**cancelled**")) return "Cancelled"
+    return undefined
+  })
+
+  return (
+    <InlineTool
+      icon="◎"
+      spinner={props.part.state.status === "running"}
+      pending={`Checking Task-${taskNum()}...`}
+      complete={statusPreview() ?? true}
+      part={props.part}
+      outputPreview={statusPreview()}
+    >
+      {`TaskProgress(Task-${taskNum()})`}
+    </InlineTool>
+  )
+}
+
+function WaitBackgroundTask(props: ToolProps<any>) {
+  const inp = props.input as any
+  const taskNum = () => inp.task_number
+  const isWaitAll = () => taskNum() == null
+
+  // Parse background task records from the embedded JSON in the output
+  const richRecords = createMemo((): BackgroundTaskInfo[] => {
+    const output = props.output ?? ""
+    if (!output) return []
+
+    // Parse embedded JSON metadata: <!-- BACKGROUND_TASKS:[...] -->
+    const metaMatch = output.match(/<!-- BACKGROUND_TASKS:(\[[\s\S]*?\]) -->/)
+    if (metaMatch) {
+      try {
+        const parsed = JSON.parse(metaMatch[1]) as any[]
+        return parsed.map((record: any) => ({
+          taskId: record.taskId ?? "",
+          taskNumber: record.taskNumber ?? 0,
+          agentName: record.agentName ?? "agent",
+          description: record.description ?? "",
+          status: record.status ?? "success",
+          toolCount: record.toolCount,
+          tokenUsage: record.tokenUsage,
+        })).sort((a: BackgroundTaskInfo, b: BackgroundTaskInfo) => a.taskNumber - b.taskNumber)
+      } catch {
+        // Fall through to basic parsing
+      }
+    }
+
+    // Fallback: parse from ### Task-N: **status** format
+    const records: BackgroundTaskInfo[] = []
+    const taskBlocks = output.split(/### Task-(\d+):/)
+    for (let i = 1; i < taskBlocks.length; i += 2) {
+      const num = parseInt(taskBlocks[i], 10)
+      const block = taskBlocks[i + 1] ?? ""
+      const statusMatch = block.match(/\*\*(\w+)\*\*/)
+      const status = statusMatch?.[1] === "completed" ? "success" : statusMatch?.[1] ?? "success"
+      records.push({
+        taskId: `task-${num}`,
+        taskNumber: num,
+        agentName: "agent",
+        description: `Task-${num}`,
+        status,
+      })
+    }
+    return records
+  })
+
+  return (
+    <Switch>
+      <Match when={isWaitAll() && props.part.state.status === "completed" && richRecords().length > 0}>
+        <BackgroundTaskGroup tasks={richRecords()} />
+      </Match>
+      <Match when={true}>
+        <InlineTool
+          icon="◎"
+          spinner={props.part.state.status === "running"}
+          pending={isWaitAll() ? "Waiting for all tasks..." : `Waiting for Task-${taskNum()}...`}
+          complete={true}
+          part={props.part}
+        >
+          {isWaitAll() ? "WaitBackgroundTask(all)" : `WaitBackgroundTask(Task-${taskNum()})`}
+        </InlineTool>
+      </Match>
+    </Switch>
+  )
+}
+
+function CancelBackgroundTask(props: ToolProps<any>) {
+  const inp = props.input as any
+  const taskNum = () => inp.task_number ?? "?"
+
+  return (
+    <InlineTool
+      icon="⊘"
+      spinner={props.part.state.status === "running"}
+      pending={`Cancelling Task-${taskNum()}...`}
+      complete={`Task-${taskNum()} cancelled`}
+      part={props.part}
+    >
+      {`CancelBackgroundTask(Task-${taskNum()})`}
     </InlineTool>
   )
 }
@@ -2432,20 +2706,86 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
 }
 
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
+  const { theme } = useTheme()
+  // Use input todos (always available once tool starts) with metadata as fallback
+  const todos = createMemo(() => {
+    const metaTodos = props.metadata.todos as any[] | undefined
+    const inputTodos = props.input.todos
+    return metaTodos?.length ? metaTodos : inputTodos ?? []
+  })
+  const hasTodos = createMemo(() => todos().length > 0)
+  const score = createMemo(() => {
+    const t = todos()
+    const done = t.filter((x: any) => x.status === "completed").length
+    return `${done}/${t.length} completed`
+  })
+
   return (
     <Switch>
-      <Match when={props.metadata.todos?.length}>
-        <BlockTool title="# Todos" part={props.part}>
-          <box>
-            <For each={props.input.todos ?? []}>
-              {(todo) => <TodoItem status={todo.status} content={todo.content} />}
+      <Match when={hasTodos()}>
+        <box flexDirection="column" marginTop={1}>
+          <text fg={theme.textMuted}>{"─".repeat(40)}</text>
+          <box flexDirection="row" gap={1} paddingLeft={1}>
+            <text style={{ bold: true }} fg={theme.text}>Todos</text>
+            <text fg={theme.textMuted}>{score()}</text>
+          </box>
+          <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+            <For each={todos()}>
+              {(todo: any) => <TodoItem status={todo.status} content={todo.content} />}
             </For>
           </box>
-        </BlockTool>
+        </box>
       </Match>
       <Match when={true}>
-        <InlineTool icon="⚙" pending="Updating todos..." complete={false} part={props.part}>
+        <InlineTool icon="☐" pending="Updating todos..." complete={false} part={props.part}>
           Updating todos...
+        </InlineTool>
+      </Match>
+    </Switch>
+  )
+}
+
+function TodoRead(props: ToolProps<any>) {
+  const { theme } = useTheme()
+  const todos = createMemo(() => {
+    const metaTodos = (props.metadata as any).todos as any[] | undefined
+    if (metaTodos?.length) return metaTodos
+    // Fallback: parse from output JSON
+    if (props.output) {
+      try {
+        const parsed = JSON.parse(props.output)
+        if (Array.isArray(parsed)) return parsed
+      } catch {
+        // not JSON
+      }
+    }
+    return []
+  })
+  const score = createMemo(() => {
+    const t = todos()
+    const done = t.filter((x: any) => x.status === "completed").length
+    return `${done}/${t.length} completed`
+  })
+
+  return (
+    <Switch>
+      <Match when={todos().length > 0}>
+        <box flexDirection="column" marginTop={1}>
+          <text fg={theme.textMuted}>{"─".repeat(40)}</text>
+          <box flexDirection="row" gap={1} paddingLeft={1}>
+            <text style={{ bold: true }} fg={theme.text}>Todos</text>
+            <text fg={theme.textMuted}>{score()}</text>
+          </box>
+          <box flexDirection="column" paddingLeft={1} paddingTop={1}>
+            <For each={todos()}>
+              {(todo: any) => <TodoItem status={todo.status} content={todo.content} />}
+            </For>
+          </box>
+        </box>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon="☐" pending="Reading todos..." complete={`${todos().length} todos`} part={props.part}>
+          Read todos
         </InlineTool>
       </Match>
     </Switch>
@@ -2490,6 +2830,113 @@ function Skill(props: ToolProps<typeof SkillTool>) {
   return (
     <InlineTool icon="→" pending="Loading skill..." complete={props.input.name} part={props.part}>
       Skill({props.input.name ? JSON.stringify(props.input.name) : ""})
+    </InlineTool>
+  )
+}
+
+function MultiEdit(props: ToolProps<any>) {
+  const ctx = use()
+  const { theme, syntax } = useTheme()
+  const inp = props.input as any
+  const fp = () => inp.filePath ?? inp.file_path
+  const editCount = createMemo(() => inp.edits?.length ?? 0)
+
+  const view = createMemo(() => {
+    const diffStyle = ctx.tui.diff_style
+    if (diffStyle === "stacked") return "unified"
+    return ctx.width > 120 ? "split" : "unified"
+  })
+
+  const lastDiff = createMemo(() => {
+    const results = props.metadata.results as any[] | undefined
+    if (!results?.length) return undefined
+    // Find the last result that has a diff
+    for (let i = results.length - 1; i >= 0; i--) {
+      if (results[i]?.diff) return results[i].diff
+    }
+    return undefined
+  })
+
+  const display = createMemo(() => {
+    const filePath = fp()
+    if (!filePath) return `MultiEdit()`
+    return `MultiEdit(${normalizePath(filePath)}) [${editCount()} edits]`
+  })
+
+  return (
+    <Switch>
+      <Match when={lastDiff()}>
+        <BlockTool title={display()} part={props.part}>
+          <box paddingLeft={1}>
+            <diff
+              diff={lastDiff()}
+              view={view()}
+              filetype={filetype(fp())}
+              syntaxStyle={syntax()}
+              showLineNumbers={true}
+              width="100%"
+              wrapMode={ctx.diffWrapMode()}
+              fg={theme.text}
+              addedBg={theme.diffAddedBg}
+              removedBg={theme.diffRemovedBg}
+              contextBg={theme.diffContextBg}
+              addedSignColor={theme.diffHighlightAdded}
+              removedSignColor={theme.diffHighlightRemoved}
+              lineNumberFg={theme.diffLineNumber}
+              lineNumberBg={theme.diffContextBg}
+              addedLineNumberBg={theme.diffAddedLineNumberBg}
+              removedLineNumberBg={theme.diffRemovedLineNumberBg}
+            />
+          </box>
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon="←" pending="Preparing multi-edit..." complete={fp()} part={props.part}>
+          {display()}
+        </InlineTool>
+      </Match>
+    </Switch>
+  )
+}
+
+function PlanExit(props: ToolProps<any>) {
+  return (
+    <InlineTool icon="⏎" pending="Exiting plan mode..." complete="Exited plan mode" part={props.part}>
+      PlanExit()
+    </InlineTool>
+  )
+}
+
+function Invalid(props: ToolProps<any>) {
+  const { theme } = useTheme()
+  return (
+    <InlineTool icon="⚠" iconColor={theme.error} pending="Invalid tool call" complete="Invalid tool call" part={props.part} outputPreview={props.output}>
+      Invalid tool call
+    </InlineTool>
+  )
+}
+
+function BatchTool(props: ToolProps<any>) {
+  const inp = props.input as any
+  const count = createMemo(() => {
+    const ops = inp.operations ?? inp.tools ?? []
+    return Array.isArray(ops) ? ops.length : 0
+  })
+
+  return (
+    <InlineTool icon="⚙" pending="Running batch..." complete={`${count()} operations`} part={props.part}>
+      Batch({count()} operations)
+    </InlineTool>
+  )
+}
+
+function LspTool(props: ToolProps<any>) {
+  const inp = props.input as any
+  const method = () => inp.method ?? inp.action ?? "query"
+
+  return (
+    <InlineTool icon="◇" pending={`LSP ${method()}...`} complete={method()} part={props.part}>
+      LSP({method()})
     </InlineTool>
   )
 }

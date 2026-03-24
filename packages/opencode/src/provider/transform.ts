@@ -909,6 +909,48 @@ export namespace ProviderTransform {
     return Math.min(model.limit.output, OUTPUT_TOKEN_MAX) || OUTPUT_TOKEN_MAX
   }
 
+  /**
+   * Resolve all $ref references in a JSON Schema by inlining definitions.
+   * Google's Gemini API does not support $ref in tool schemas.
+   */
+  export function derefJsonSchema(root: Record<string, any>): Record<string, any> {
+    const defs: Record<string, any> = root?.$defs ?? root?.definitions ?? {}
+    const seen = new Set<string>()
+
+    const resolve = (node: any): any => {
+      if (node === null || typeof node !== "object") return node
+      if (Array.isArray(node)) return node.map(resolve)
+
+      if (node.$ref && typeof node.$ref === "string") {
+        const refPath = node.$ref.replace(/^#\/(\$defs|definitions)\//, "")
+        if (seen.has(refPath)) {
+          // Circular reference — collapse to generic object
+          return { type: "object" }
+        }
+        const def = defs[refPath]
+        if (def) {
+          seen.add(refPath)
+          const { $ref: _, ...rest } = node
+          const resolved = resolve({ ...def, ...rest })
+          seen.delete(refPath)
+          return resolved
+        }
+        // Unresolvable $ref — strip it
+        const { $ref: _, ...rest } = node
+        return Object.keys(rest).length > 0 ? resolve(rest) : { type: "string" }
+      }
+
+      const result: Record<string, any> = {}
+      for (const [k, v] of Object.entries(node)) {
+        if (k === "$defs" || k === "definitions") continue
+        result[k] = resolve(v)
+      }
+      return result
+    }
+
+    return resolve(root)
+  }
+
   export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JSONSchema7): JSONSchema7 {
     /*
     if (["openai", "azure"].includes(providerID)) {
@@ -927,6 +969,11 @@ export namespace ProviderTransform {
       }
     }
     */
+
+    // Dereference $ref for providers that don't support it (Google/Gemini)
+    if (model.providerID === "google" || model.api.id.includes("gemini")) {
+      schema = derefJsonSchema(schema as any) as typeof schema
+    }
 
     // Convert integer enums to string enums for Google/Gemini
     if (model.providerID === "google" || model.api.id.includes("gemini")) {

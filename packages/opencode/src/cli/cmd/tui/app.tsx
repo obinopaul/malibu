@@ -103,6 +103,7 @@ async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
 }
 
 import type { EventSource } from "./context/sdk"
+import { Log } from "@/util/log"
 
 export function tui(input: {
   url: string
@@ -124,7 +125,23 @@ export function tui(input: {
     // the original console mode which re-enables ENABLE_PROCESSED_INPUT.
     win32DisableProcessedInput()
 
+    // Redirect console.error/console.warn to the log file during TUI mode.
+    // LangChain/LangGraph internals use console.error for handler errors
+    // (e.g., "Error in handler StreamMessagesHandler"), which bypass Ink's
+    // renderer and corrupt the TUI display.
+    const originalConsoleError = console.error
+    const originalConsoleWarn = console.warn
+    const tuiLog = Log.create({ service: "tui-console" })
+    console.error = (...args: any[]) => {
+      tuiLog.error(args.map(String).join(" "))
+    }
+    console.warn = (...args: any[]) => {
+      tuiLog.warn(args.map(String).join(" "))
+    }
+
     const onExit = async () => {
+      console.error = originalConsoleError
+      console.warn = originalConsoleWarn
       unguard?.()
       resolve()
     }

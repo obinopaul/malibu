@@ -959,7 +959,7 @@ export namespace Harness {
 
         for (const p of parts ?? []) {
           if (p.type === "text" && (p.content || p.text)) {
-            contentParts.push(p.content ?? p.text)
+            contentParts.push({ type: "text", text: p.content ?? p.text })
           } else if (p.type === "file" && p.mime && p.data) {
             if (p.mime.startsWith("image/")) {
               contentParts.push({
@@ -970,8 +970,8 @@ export namespace Harness {
           }
         }
 
-        if (contentParts.length === 1 && typeof contentParts[0] === "string") {
-          result.push(new HumanMessage(contentParts[0]))
+        if (contentParts.length === 1 && contentParts[0]?.type === "text") {
+          result.push(new HumanMessage(contentParts[0].text))
         } else if (contentParts.length > 0) {
           result.push(new HumanMessage({ content: contentParts }))
         }
