@@ -162,8 +162,14 @@ export namespace Installation {
     health = undefined
   }
 
+  function isCompiledBinary() {
+    const exec = path.basename(process.execPath).toLowerCase()
+    return exec === "malibu" || exec === "malibu.exe"
+  }
+
   export async function verifyDependencyHealth(input?: { root?: string; bun?: string; probes?: string[] }) {
     if (process.env.MALIBU_SKIP_DEPENDENCY_HEALTH_CHECK === "1") return
+    if (isCompiledBinary()) return
     if (input) return checkDependencyHealth(input)
     if (!health) health = checkDependencyHealth()
     return health

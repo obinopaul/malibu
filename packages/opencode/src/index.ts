@@ -12,8 +12,16 @@ const HEALTH_SKIP = new Set(["completion", "upgrade", "uninstall", "--help", "-h
 const rawVersion = Reflect.get(globalThis, "MALIBU_VERSION")
 const VERSION = typeof rawVersion === "string" ? rawVersion : "local"
 
+function isCompiledBinary() {
+  // In compiled Bun binaries, process.execPath points to the malibu binary itself.
+  // In development, process.execPath points to the bun runtime.
+  const exec = path.basename(process.execPath).toLowerCase()
+  return exec === "malibu" || exec === "malibu.exe"
+}
+
 function shouldCheckHealth(argv: string[]) {
   if (process.env.MALIBU_SKIP_DEPENDENCY_HEALTH_CHECK === "1") return false
+  if (isCompiledBinary()) return false
   return !argv.some((item) => HEALTH_SKIP.has(item))
 }
 
