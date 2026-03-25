@@ -178,13 +178,15 @@ export namespace HarnessProcessor {
       { messages: streamInput.messages },
     )
 
-    // Track snapshot before execution
-    const snapshot = await Snapshot.track()
+    // Start snapshot tracking in background — don't block agent startup
+    const snapshotPromise = Snapshot.track()
+    // Write step-start part without waiting for snapshot (will be updated later)
+    const stepStartPartId = PartID.ascending()
     await Session.updatePart({
-      id: PartID.ascending(),
+      id: stepStartPartId,
       messageID: input.assistantMessage.id,
       sessionID: input.sessionID,
-      snapshot,
+      snapshot: undefined,
       type: "step-start",
     })
 
@@ -386,7 +388,11 @@ export namespace HarnessProcessor {
         return
       }
 
+      // Look up metadata by tool_call_id first, then fall back to tool-name key
+      // (the adapter always records a fallback keyed by `__tool__${toolName}`)
       const meta = toolMetadataStore.get(metadataKey(p.sessionID, id))
+        ?? toolMetadataStore.get(metadataKey(p.sessionID, `__tool__${p.tool}`))
+        ?? toolMetadataStore.get(metadataKey(p.sessionID, `__tool__${match.tool}`))
       const state = match.state as any
       const args = (() => {
         const current = state?.input ?? {}
@@ -446,6 +452,9 @@ export namespace HarnessProcessor {
       if (id !== p.callId) {
         toolMetadataStore.delete(metadataKey(p.sessionID, p.callId))
       }
+      // Clean up tool-name fallback key
+      toolMetadataStore.delete(metadataKey(p.sessionID, `__tool__${p.tool}`))
+      toolMetadataStore.delete(metadataKey(p.sessionID, `__tool__${match.tool}`))
     }
 
     const toolEndUnsub = Bus.subscribe(Harness.Event.ToolEnd, async (evt) => {
@@ -602,8 +611,17 @@ export namespace HarnessProcessor {
       input.assistantMessage.tokens = usage.tokens
       input.assistantMessage.cost += usage.cost
 
+      // Resolve the pre-agent snapshot (should be done by now since agent ran)
+      const snapshot = await snapshotPromise
+
+      // Stage once, then run track + patch in parallel (avoids redundant git add)
+      await Snapshot.stage()
+      const [finishSnapshot, patchResult] = await Promise.all([
+        Snapshot.trackFromIndex(),
+        snapshot ? Snapshot.patchFromIndex(snapshot) : Promise.resolve(undefined),
+      ])
+
       // Record step finish
-      const finishSnapshot = await Snapshot.track()
       await Session.updatePart({
         id: PartID.ascending(),
         reason: harnessResult.status === "stop" ? "stop" : "tool-calls",
@@ -615,19 +633,27 @@ export namespace HarnessProcessor {
         cost: usage.cost,
       })
 
-      // Track patches
+      // Update step-start part with the resolved pre-agent snapshot
       if (snapshot) {
-        const patch = await Snapshot.patch(snapshot)
-        if (patch.files.length) {
-          await Session.updatePart({
-            id: PartID.ascending(),
-            messageID: input.assistantMessage.id,
-            sessionID: input.sessionID,
-            type: "patch",
-            hash: patch.hash,
-            files: patch.files,
-          })
-        }
+        await Session.updatePart({
+          id: stepStartPartId,
+          messageID: input.assistantMessage.id,
+          sessionID: input.sessionID,
+          snapshot,
+          type: "step-start",
+        })
+      }
+
+      // Track patches
+      if (patchResult && patchResult.files.length) {
+        await Session.updatePart({
+          id: PartID.ascending(),
+          messageID: input.assistantMessage.id,
+          sessionID: input.sessionID,
+          type: "patch",
+          hash: patchResult.hash,
+          files: patchResult.files,
+        })
       }
 
       input.assistantMessage.finish = harnessResult.status === "stop" ? "stop" : "tool-calls"

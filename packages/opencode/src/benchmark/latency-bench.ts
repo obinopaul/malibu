@@ -227,6 +227,9 @@ function installGlobalInstrumentation() {
 
   // --- MALIBU POST-AGENT: harness-processor finalization ---
   restore(Snapshot, "track", wrapAsync(Snapshot, "track", "Snapshot.track()", "malibu-post"))
+  restore(Snapshot, "stage", wrapAsync(Snapshot, "stage", "Snapshot.stage()", "malibu-post"))
+  restore(Snapshot, "trackFromIndex", wrapAsync(Snapshot, "trackFromIndex", "Snapshot.trackFromIndex()", "malibu-post"))
+  restore(Snapshot, "patchFromIndex", wrapAsync(Snapshot, "patchFromIndex", "Snapshot.patchFromIndex()", "malibu-post"))
   restore(Snapshot, "patch", wrapAsync(Snapshot, "patch", "Snapshot.patch()", "malibu-post"))
   restore(SessionSummary, "summarize", wrapAsync(SessionSummary, "summarize", "SessionSummary.summarize()", "malibu-post"))
   restore(SessionCompaction, "prune", wrapAsync(SessionCompaction, "prune", "SessionCompaction.prune()", "malibu-post"))

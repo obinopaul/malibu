@@ -49,6 +49,9 @@ export namespace Snapshot {
     readonly init: () => Effect.Effect<void>
     readonly cleanup: () => Effect.Effect<void>
     readonly track: () => Effect.Effect<string | undefined>
+    readonly stage: () => Effect.Effect<void>
+    readonly trackFromIndex: () => Effect.Effect<string | undefined>
+    readonly patchFromIndex: (hash: string) => Effect.Effect<Snapshot.Patch>
     readonly patch: (hash: string) => Effect.Effect<Snapshot.Patch>
     readonly restore: (snapshot: string) => Effect.Effect<void>
     readonly revert: (patches: Snapshot.Patch[]) => Effect.Effect<void>
@@ -171,6 +174,50 @@ export namespace Snapshot {
               const hash = result.text.trim()
               log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
               return hash
+            })
+
+            // trackFromIndex: just write-tree, assumes add() was already called
+            const trackFromIndex = Effect.fnUntraced(function* () {
+              if (!(yield* enabled())) return
+              const existed = yield* exists(state.gitdir)
+              yield* fs.ensureDir(state.gitdir).pipe(Effect.orDie)
+              if (!existed) {
+                yield* git(["init"], {
+                  env: { GIT_DIR: state.gitdir, GIT_WORK_TREE: state.worktree },
+                })
+                yield* git(["--git-dir", state.gitdir, "config", "core.autocrlf", "false"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.longpaths", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.symlinks", "true"])
+                yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
+                log.info("initialized")
+              }
+              const result = yield* git(args(["write-tree"]), { cwd: state.directory })
+              const hash = result.text.trim()
+              log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
+              return hash
+            })
+
+            // patchFromIndex: just diff, assumes add() was already called
+            const patchFromIndex = Effect.fnUntraced(function* (hash: string) {
+              const result = yield* git(
+                [...quote, ...args(["diff", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                {
+                  cwd: state.directory,
+                },
+              )
+              if (result.code !== 0) {
+                log.warn("failed to get diff", { hash, exitCode: result.code })
+                return { hash, files: [] }
+              }
+              return {
+                hash,
+                files: result.text
+                  .trim()
+                  .split("\n")
+                  .map((x) => x.trim())
+                  .filter(Boolean)
+                  .map((x) => path.join(state.worktree, x).replaceAll("\\", "/")),
+              }
             })
 
             const patch = Effect.fnUntraced(function* (hash: string) {
@@ -320,7 +367,7 @@ export namespace Snapshot {
               Effect.forkScoped,
             )
 
-            return { cleanup, track, patch, restore, revert, diff, diffFull }
+            return { cleanup, track, stage: add, trackFromIndex, patchFromIndex, patch, restore, revert, diff, diffFull }
           }),
         )
 
@@ -333,6 +380,15 @@ export namespace Snapshot {
           }),
           track: Effect.fn("Snapshot.track")(function* () {
             return yield* InstanceState.useEffect(state, (s) => s.track())
+          }),
+          stage: Effect.fn("Snapshot.stage")(function* () {
+            return yield* InstanceState.useEffect(state, (s) => s.stage())
+          }),
+          trackFromIndex: Effect.fn("Snapshot.trackFromIndex")(function* () {
+            return yield* InstanceState.useEffect(state, (s) => s.trackFromIndex())
+          }),
+          patchFromIndex: Effect.fn("Snapshot.patchFromIndex")(function* (hash: string) {
+            return yield* InstanceState.useEffect(state, (s) => s.patchFromIndex(hash))
           }),
           patch: Effect.fn("Snapshot.patch")(function* (hash: string) {
             return yield* InstanceState.useEffect(state, (s) => s.patch(hash))
@@ -372,6 +428,21 @@ export namespace Snapshot {
 
   export async function track() {
     return runPromise((svc) => svc.track())
+  }
+
+  /** Run sync + git add to stage the working tree. Call before trackFromIndex/patchFromIndex. */
+  export async function stage() {
+    return runPromise((svc) => svc.stage())
+  }
+
+  /** Write-tree only (no git add). Requires stage() to have been called first. */
+  export async function trackFromIndex() {
+    return runPromise((svc) => svc.trackFromIndex())
+  }
+
+  /** Diff only (no git add). Requires stage() to have been called first. */
+  export async function patchFromIndex(hash: string) {
+    return runPromise((svc) => svc.patchFromIndex(hash))
   }
 
   export async function patch(hash: string) {

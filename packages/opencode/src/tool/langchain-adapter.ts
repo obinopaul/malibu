@@ -193,19 +193,23 @@ export async function toLangChainTool(
 
         const result = await initialized.execute(args, ctx)
 
-        if (toolCallId) {
-          record(bridge.sessionID, toolCallId, {
-            title: result.title,
-            metadata: result.metadata,
-            status: "completed",
-            attachments: result.attachments?.map((attachment) => ({
-              ...attachment,
-              id: PartID.ascending(),
-              sessionID: ctx.sessionID,
-              messageID: bridge.messageID,
-            })),
-          })
+        const metaPayload = {
+          title: result.title,
+          metadata: result.metadata,
+          status: "completed" as const,
+          attachments: result.attachments?.map((attachment) => ({
+            ...attachment,
+            id: PartID.ascending(),
+            sessionID: ctx.sessionID,
+            messageID: bridge.messageID,
+          })),
         }
+        if (toolCallId) {
+          record(bridge.sessionID, toolCallId, metaPayload)
+        }
+        // Always record by tool name as fallback so harness-processor can
+        // find metadata even when tool_call_id is not propagated via config.
+        record(bridge.sessionID, `__tool__${info.id}`, metaPayload)
 
         await Plugin.trigger(
           "tool.execute.after",
