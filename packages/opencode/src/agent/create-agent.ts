@@ -7,7 +7,7 @@
  * so DeepAgent's built-in filesystem tools are not needed.
  *
  * Middleware assembled (in order):
- * 1. todoListMiddleware — task tracking
+ * 1. (disabled) todoListMiddleware — replaced by Malibu's TodoWriteTool/TodoReadTool
  * 2. createSubAgentMiddleware — sub-agent delegation (explore, general)
  * 3. createSummarizationMiddleware — context window management
  * 4. createPatchToolCallsMiddleware — cross-provider tool compat
@@ -114,7 +114,7 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
   // - Here: gives subagents their own todo tracking
   // - In builtInMiddleware: gives the main agent todo tracking
   const subagentMiddleware: AgentMiddleware[] = [
-    todoListMiddleware() as any,
+    // todoListMiddleware() as any, // Disabled: using Malibu's own TodoWriteTool/TodoReadTool instead
     createSummarizationMiddleware({ model, backend }),
     createPatchToolCallsMiddleware(),
   ]
@@ -147,8 +147,8 @@ export function createMalibuAgent(params: CreateMalibuAgentParams) {
 
   // --- Built-in middleware (NO filesystem middleware from deepagents) ---
   const builtInMiddleware: AgentMiddleware[] = [
-    // 1. Todo list management
-    todoListMiddleware() as any,
+    // 1. Todo list management — disabled: using Malibu's own TodoWriteTool/TodoReadTool instead
+    // todoListMiddleware() as any,
     // 2. Sub-agent delegation (explore, general via sync task tool)
     createSubAgentMiddleware({
       defaultModel: model,

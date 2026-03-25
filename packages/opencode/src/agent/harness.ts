@@ -48,12 +48,9 @@ const log = Log.create({ service: "harness" })
  * Tools that duplicate middleware functionality and should NOT be passed
  * as custom tools to createMalibuAgent.
  * - "task" duplicates SubAgentMiddleware's task tool
- * - "todowrite"/"todoread" duplicate TodoListMiddleware
  */
 const MIDDLEWARE_ONLY_TOOLS = new Set([
   "task",
-  "todowrite",
-  "todoread",
 ])
 
 export namespace Harness {

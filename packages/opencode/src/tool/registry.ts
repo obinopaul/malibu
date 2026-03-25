@@ -30,6 +30,7 @@ import { LspTool } from "./lsp"
 import { Truncate } from "./truncate"
 
 import { ApplyPatchTool } from "./apply_patch"
+import { MultiEditTool } from "./multiedit"
 import { Glob } from "../util/glob"
 import { pathToFileURL } from "url"
 
@@ -111,11 +112,12 @@ export namespace ToolRegistry {
       GlobTool,
       GrepTool,
       EditTool,
+      MultiEditTool,
       WriteTool,
 
       WebFetchTool,
       TodoWriteTool,
-      // TodoReadTool,
+      TodoReadTool,
       WebSearchTool,
       CodeSearchTool,
       SkillTool,
@@ -142,9 +144,10 @@ export namespace ToolRegistry {
     const result = await Promise.all(
       tools
         .filter((t) => {
-          // Enable websearch/codesearch for zen users OR via enable flag
+          // websearch/codesearch available for any provider when EXA is enabled
+          // (no longer gated to Malibu provider only)
           if (t.id === "codesearch" || t.id === "websearch") {
-            return model.providerID === ProviderID.malibu || Flag.MALIBU_ENABLE_EXA
+            return Flag.MALIBU_ENABLE_EXA
           }
 
           // use apply tool in same format as codex
