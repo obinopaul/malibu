@@ -1,6 +1,0 @@
-packages:
-  - "libs/*"
-  - "libs/providers/*"
-  - "internal/*"
-  - "evals/*"
-  - "examples"
