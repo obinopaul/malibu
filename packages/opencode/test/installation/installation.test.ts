@@ -115,13 +115,13 @@ describe("installation", () => {
         },
       })
 
-      await expect(
-        Installation.checkDependencyHealth({
+      const err = await Installation.checkDependencyHealth({
           root: tmp.path,
           bun: "1.3.9",
           probes: ["packages/opencode/node_modules/deepagents"],
-        }),
-      ).rejects.toThrow("Expected Bun 1.3.10 or newer patch release, but found 1.3.9.")
+        }).catch((e: any) => e)
+      expect(err).toBeInstanceOf(Installation.DependencyHealthError)
+      expect(err.data.message).toContain("Expected Bun 1.3.10 or newer patch release, but found 1.3.9.")
     })
 
     test("fails when a Bun dependency probe is unreadable", async () => {
@@ -134,13 +134,13 @@ describe("installation", () => {
         },
       })
 
-      await expect(
-        Installation.checkDependencyHealth({
+      const err = await Installation.checkDependencyHealth({
           root: tmp.path,
           bun: "1.3.10",
           probes: ["packages/opencode/node_modules/deepagents"],
-        }),
-      ).rejects.toThrow("Unreadable dependency entries:")
+        }).catch((e: any) => e)
+      expect(err).toBeInstanceOf(Installation.DependencyHealthError)
+      expect(err.data.message).toContain("Unreadable dependency entries:")
     })
   })
 
