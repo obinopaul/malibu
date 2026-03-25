@@ -1829,6 +1829,104 @@ function BlockTool(props: {
   )
 }
 
+/**
+ * CollapsibleDiff — wraps the <diff> component with expand/collapse behavior.
+ * Collapsed: shows only the changed lines (+/-) as a compact preview.
+ * Expanded: shows the full diff with context via the <diff> component.
+ *
+ * We cannot truncate a unified diff at arbitrary line boundaries because the
+ * hunk headers encode expected line counts — slicing mid-hunk causes parse errors.
+ * Instead we toggle between a compact changed-lines-only preview and the full diff.
+ */
+function CollapsibleDiff(props: {
+  diff: string | undefined
+  maxLines?: number
+  view: "unified" | "split"
+  filetype: string
+  syntaxStyle: any
+  wrapMode: string
+  theme: any
+}) {
+  const { theme } = useTheme()
+  const renderer = useRenderer()
+  const maxLines = props.maxLines ?? 12
+
+  // Extract only changed lines (+/-) for the collapsed preview
+  const changedLines = createMemo(() => {
+    const diff = props.diff ?? ""
+    return diff
+      .split("\n")
+      .filter((l) => (l.startsWith("+") || l.startsWith("-")) && !l.startsWith("---") && !l.startsWith("+++"))
+  })
+
+  const totalLines = createMemo(() => (props.diff ?? "").split("\n").length)
+  const overflow = createMemo(() => totalLines() > maxLines)
+  const [expanded, setExpanded] = createSignal(!overflow())
+
+  // Auto-expand small diffs, collapse large ones when diff changes
+  createEffect(() => {
+    props.diff // track dependency
+    setExpanded(!overflow())
+  })
+
+  return (
+    <box
+      gap={1}
+      onMouseUp={() => {
+        if (renderer.getSelection()?.getSelectedText()) return
+        if (overflow()) setExpanded((prev) => !prev)
+      }}
+    >
+      <Show
+        when={expanded()}
+        fallback={
+          <box paddingLeft={1}>
+            <For each={changedLines().slice(0, maxLines)}>
+              {(line) => (
+                <text
+                  fg={line.startsWith("+") ? props.theme.diffHighlightAdded : props.theme.diffHighlightRemoved}
+                >
+                  {line}
+                </text>
+              )}
+            </For>
+            <Show when={changedLines().length > maxLines}>
+              <text fg={theme.textMuted}>  … {changedLines().length - maxLines} more changed lines</text>
+            </Show>
+          </box>
+        }
+      >
+        <box paddingLeft={1}>
+          <diff
+            diff={props.diff}
+            view={props.view}
+            filetype={props.filetype}
+            syntaxStyle={props.syntaxStyle}
+            showLineNumbers={true}
+            width="100%"
+            wrapMode={props.wrapMode}
+            fg={props.theme.text}
+            addedBg={props.theme.diffAddedBg}
+            removedBg={props.theme.diffRemovedBg}
+            contextBg={props.theme.diffContextBg}
+            addedSignColor={props.theme.diffHighlightAdded}
+            removedSignColor={props.theme.diffHighlightRemoved}
+            lineNumberFg={props.theme.diffLineNumber}
+            lineNumberBg={props.theme.diffContextBg}
+            addedLineNumberBg={props.theme.diffAddedLineNumberBg}
+            removedLineNumberBg={props.theme.diffRemovedLineNumberBg}
+          />
+        </box>
+      </Show>
+      <Show when={overflow()}>
+        <text fg={theme.textMuted}>
+          {expanded() ? "▴ Click to collapse" : `▾ Click to expand full diff`}
+        </text>
+      </Show>
+    </box>
+  )
+}
+
 function ToolOutputPreview(props: {
   output: string
   maxLines?: number
@@ -2597,27 +2695,15 @@ function Edit(props: ToolProps<typeof EditTool>) {
           <Show when={diffSummary()}>
             <text fg={theme.textMuted}>⎿  {diffSummary()}</text>
           </Show>
-          <box paddingLeft={1}>
-            <diff
-              diff={diffContent()}
-              view={view()}
-              filetype={ft()}
-              syntaxStyle={syntax()}
-              showLineNumbers={true}
-              width="100%"
-              wrapMode={ctx.diffWrapMode()}
-              fg={theme.text}
-              addedBg={theme.diffAddedBg}
-              removedBg={theme.diffRemovedBg}
-              contextBg={theme.diffContextBg}
-              addedSignColor={theme.diffHighlightAdded}
-              removedSignColor={theme.diffHighlightRemoved}
-              lineNumberFg={theme.diffLineNumber}
-              lineNumberBg={theme.diffContextBg}
-              addedLineNumberBg={theme.diffAddedLineNumberBg}
-              removedLineNumberBg={theme.diffRemovedLineNumberBg}
-            />
-          </box>
+          <CollapsibleDiff
+            diff={diffContent()}
+            maxLines={12}
+            view={view()}
+            filetype={ft()}
+            syntaxStyle={syntax()}
+            wrapMode={ctx.diffWrapMode()}
+            theme={theme}
+          />
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={fp() ?? ""} />
         </BlockTool>
       </Match>
@@ -2644,27 +2730,15 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
 
   function Diff(p: { diff: string; filePath: string }) {
     return (
-      <box paddingLeft={1}>
-        <diff
-          diff={p.diff}
-          view={view()}
-          filetype={filetype(p.filePath)}
-          syntaxStyle={syntax()}
-          showLineNumbers={true}
-          width="100%"
-          wrapMode={ctx.diffWrapMode()}
-          fg={theme.text}
-          addedBg={theme.diffAddedBg}
-          removedBg={theme.diffRemovedBg}
-          contextBg={theme.diffContextBg}
-          addedSignColor={theme.diffHighlightAdded}
-          removedSignColor={theme.diffHighlightRemoved}
-          lineNumberFg={theme.diffLineNumber}
-          lineNumberBg={theme.diffContextBg}
-          addedLineNumberBg={theme.diffAddedLineNumberBg}
-          removedLineNumberBg={theme.diffRemovedLineNumberBg}
-        />
-      </box>
+      <CollapsibleDiff
+        diff={p.diff}
+        maxLines={12}
+        view={view()}
+        filetype={filetype(p.filePath)}
+        syntaxStyle={syntax()}
+        wrapMode={ctx.diffWrapMode()}
+        theme={theme}
+      />
     )
   }
 
@@ -2867,27 +2941,15 @@ function MultiEdit(props: ToolProps<any>) {
     <Switch>
       <Match when={lastDiff()}>
         <BlockTool title={display()} part={props.part}>
-          <box paddingLeft={1}>
-            <diff
-              diff={lastDiff()}
-              view={view()}
-              filetype={filetype(fp())}
-              syntaxStyle={syntax()}
-              showLineNumbers={true}
-              width="100%"
-              wrapMode={ctx.diffWrapMode()}
-              fg={theme.text}
-              addedBg={theme.diffAddedBg}
-              removedBg={theme.diffRemovedBg}
-              contextBg={theme.diffContextBg}
-              addedSignColor={theme.diffHighlightAdded}
-              removedSignColor={theme.diffHighlightRemoved}
-              lineNumberFg={theme.diffLineNumber}
-              lineNumberBg={theme.diffContextBg}
-              addedLineNumberBg={theme.diffAddedLineNumberBg}
-              removedLineNumberBg={theme.diffRemovedLineNumberBg}
-            />
-          </box>
+          <CollapsibleDiff
+            diff={lastDiff()}
+            maxLines={12}
+            view={view()}
+            filetype={filetype(fp())}
+            syntaxStyle={syntax()}
+            wrapMode={ctx.diffWrapMode()}
+            theme={theme}
+          />
         </BlockTool>
       </Match>
       <Match when={true}>

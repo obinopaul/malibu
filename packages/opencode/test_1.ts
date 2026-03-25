@@ -1,24 +1,23 @@
-// Initial test file for demonstrating edit and multiedit tools
-// This is a simple TypeScript test file
-
-const greeting = "Hello, Universe!"
-const version = "2.0.0"
-const author = "Demo User"
-
-function main() {
-  console.log(greeting)
-  console.log("Version:", version)
-  console.log("Author:", author)
+// Initial content for test_1.ts
+function greet(name: string, greeting: string = "Hello") {
+  return `${greeting}, ${name}!`
 }
 
-interface Config {
-  name: string
-  value: number
+function farewell(name: string) {
+  return `Goodbye, ${name}!`
 }
 
-const defaultConfig: Config = {
-  name: "production",
-  value: 100,
+const users = ["Alice", "Bob", "Charlie", "David", "Eve"]
+const admins = ["Admin1", "SuperUser"]
+
+for (const user of users) {
+  console.log(greet(user))
+  console.log(greet(user, "Hi there"))
 }
 
-main()
+for (const admin of admins) {
+  console.log(greet(admin, "Welcome"))
+  console.log(farewell(admin))
+}
+
+console.log("=== Done processing all users ===")
